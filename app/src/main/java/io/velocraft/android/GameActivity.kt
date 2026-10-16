@@ -103,7 +103,7 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
         proHudOverlay = ProHudOverlayView(this).apply {
             activeRendererLabel = effectiveRenderer.id.uppercase()
             onGyroToggleRequested = { enabled ->
-                gyroController.setEnabled(enabled)
+                gyroController.isEnabled = enabled
             }
             onQuickSettingsRequested = {
                 customModalView.openOnTab(CustomCanvasModalView.Tab.RENDERER_ACCOUNT)

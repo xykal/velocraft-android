@@ -30,10 +30,6 @@ class GyroAimController(context: Context) : SensorEventListener {
     private val deadzoneRadPerSec: Float = 0.012f
     private var lastTimestampNs: Long = 0L
 
-    fun setEnabled(enabled: Boolean) {
-        isEnabled = enabled
-    }
-
     fun start() {
         if (!isEnabled || gyroSensor == null) return
         lastTimestampNs = 0L
