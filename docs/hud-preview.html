@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VeloCraft Direct — Interactive Pro PvP HUD & Engine Simulator</title>
+  <style>
+    :root {
+      --bg-dark: #090d16;
+      --panel: rgba(15, 23, 42, 0.86);
+      --accent: #38bdf8;
+      --danger: #ef4444;
+      --success: #22c55e;
+      --warn: #f59e0b;
+      --purple: #a855f7;
+    }
+    * { box-sizing: border-box; user-select: none; -webkit-user-select: none; }
+    body {
+      margin: 0;
+      padding: 16px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #060911;
+      color: #f8fafc;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 14px;
+    }
+    .header-bar {
+      width: 100%;
+      max-width: 960px;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      background: #0f172a;
+      border: 1px solid #1e293b;
+      border-radius: 12px;
+      padding: 12px 18px;
+      gap: 10px;
+    }
+    .header-bar h1 {
+      margin: 0;
+      font-size: 18px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #38bdf8;
+    }
+    .header-bar p {
+      margin: 2px 0 0 0;
+      font-size: 12px;
+      color: #94a3b8;
+    }
+    .toolbar-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .chip-btn {
+      background: #1e293b;
+      color: #e2e8f0;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 7px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .chip-btn:hover { border-color: #38bdf8; }
+    .chip-btn.active {
+      background: #0284c7;
+      border-color: #38bdf8;
+      color: #fff;
+    }
+    .chip-btn.warn.active {
+      background: #ea580c;
+      border-color: #fb923c;
+    }
+
+    /* Phone Screen Viewport (16:9 Landscape) */
+    .phone-frame {
+      position: relative;
+      width: 100%;
+      max-width: 960px;
+      aspect-ratio: 16 / 9;
+      border-radius: 22px;
+      border: 4px solid #334155;
+      overflow: hidden;
+      background: linear-gradient(180deg, #38bdf8 0%, #7dd3fc 48%, #4d7c0f 48.5%, #365314 100%);
+      box-shadow: 0 20px 50px rgba(0,0,0,0.75);
+    }
+
+    /* Simulated 3D Minecraft World Canvas */
+    #worldCanvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    /* Top Telemetry Pill */
+    .telemetry-pill {
+      position: absolute;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(15, 23, 42, 0.85);
+      border: 1px solid rgba(56, 189, 248, 0.4);
+      padding: 5px 16px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+      color: #f8fafc;
+      z-index: 20;
+      white-space: nowrap;
+      pointer-events: none;
+    }
+    .telemetry-pill span.hl { color: #38bdf8; }
+    .telemetry-pill span.fps { color: #4ade80; }
+    .telemetry-pill span.mode { color: #facc15; }
+
+    /* Center Crosshair */
+    .crosshair {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 18px;
+      height: 18px;
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+      z-index: 15;
+    }
+    .crosshair::before, .crosshair::after {
+      content: "";
+      position: absolute;
+      background: rgba(255, 255, 255, 0.92);
+      box-shadow: 0 0 2px rgba(0,0,0,0.8);
+    }
+    .crosshair::before { top: 8px; left: 0; width: 18px; height: 2px; }
+    .crosshair::after { top: 0; left: 8px; width: 2px; height: 18px; }
+
+    /* HUD Circular Buttons */
+    .hud-btn {
+      position: absolute;
+      transform: translate(-50%, -50%);
+      border-radius: 50%;
+      background: rgba(15, 23, 42, 0.78);
+      border: 2px solid #38bdf8;
+      color: #ffffff;
+      font-weight: 700;
+      font-size: 11px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      cursor: pointer;
+      z-index: 25;
+      transition: transform 0.06s ease, background 0.1s ease;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.35);
+    }
+    .hud-btn:active, .hud-btn.pressed {
+      transform: translate(-50%, -50%) scale(0.92);
+      background: rgba(56, 189, 248, 0.85);
+    }
+    .hud-btn.toggled {
+      background: rgba(34, 197, 94, 0.88);
+      border-color: #86efac;
+    }
+    .phone-frame.edit-mode .hud-btn {
+      border-style: dashed;
+      border-color: #fb923c !important;
+      cursor: move;
+    }
+
+    /* Direct 9-Slot Hotbar */
+    .hotbar {
+      position: absolute;
+      bottom: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 4px;
+      background: rgba(15, 23, 42, 0.82);
+      padding: 4px;
+      border-radius: 10px;
+      border: 1px solid rgba(148, 163, 184, 0.35);
+      z-index: 25;
+    }
+    .hotbar-slot {
+      width: 42px;
+      height: 42px;
+      border-radius: 7px;
+      background: rgba(30, 41, 59, 0.85);
+      border: 2px solid rgba(100, 116, 139, 0.5);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      font-weight: 700;
+      color: #cbd5e1;
+      cursor: pointer;
+    }
+    .hotbar-slot .item-icon { font-size: 16px; line-height: 1; }
+    .hotbar-slot.selected {
+      border-color: #ffffff;
+      background: rgba(56, 189, 248, 0.45);
+      color: #fff;
+      box-shadow: 0 0 10px rgba(56, 189, 248, 0.5);
+    }
+
+    /* Simulated Inventory GUI Modal (Auto-triggered by FabricStateBridge) */
+    .gui-modal {
+      position: absolute;
+      inset: 0;
+      background: rgba(9, 13, 22, 0.72);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 30;
+    }
+    .gui-modal.open { display: flex; }
+    .inv-window {
+      width: 420px;
+      background: #c6c6c6;
+      border: 3px solid #373737;
+      border-radius: 6px;
+      padding: 14px;
+      color: #1f2937;
+      box-shadow: 0 16px 40px rgba(0,0,0,0.8);
+    }
+    .inv-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-weight: 800;
+      font-size: 13px;
+      margin-bottom: 10px;
+    }
+    .inv-grid {
+      display: grid;
+      grid-template-columns: repeat(9, 1fr);
+      gap: 4px;
+    }
+    .inv-cell {
+      aspect-ratio: 1;
+      background: #8b8b8b;
+      border-top: 2px solid #373737;
+      border-left: 2px solid #373737;
+      border-right: 2px solid #ffffff;
+      border-bottom: 2px solid #ffffff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      cursor: pointer;
+    }
+    .inv-cell:hover { background: #a8d5ff; }
+
+    /* Info Footer */
+    .info-grid {
+      width: 100%;
+      max-width: 960px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 12px;
+    }
+    .info-card {
+      background: #0f172a;
+      border: 1px solid #1e293b;
+      border-radius: 10px;
+      padding: 12px 15px;
+      font-size: 12.5px;
+      line-height: 1.5;
+      color: #cbd5e1;
+    }
+    .info-card h3 {
+      margin: 0 0 6px 0;
+      font-size: 13.5px;
+      color: #38bdf8;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="header-bar">
+    <div>
+      <h1>⚡ VeloCraft Direct — Pro PvP HUD & Native Bridge Simulator</h1>
+      <p>Coba klik tombol ATK/PLACE untuk tes CPS, geser layar kanan untuk rotasi kamera, buka Inventory (otomatis pindah mode sentuh), atau aktifkan <b>Edit HUD</b> untuk geser posisi tombol!</p>
+    </div>
+    <div class="toolbar-actions">
+      <button id="btnToggleGui" class="chip-btn">🎒 Simulasi Buka Inventory (E)</button>
+      <button id="btnToggleEdit" class="chip-btn warn">🔧 Edit Posisi Tombol HUD</button>
+      <button id="btnResetHud" class="chip-btn">↺ Reset Layout</button>
+    </div>
+  </div>
+
+  <div id="phoneFrame" class="phone-frame">
+    <canvas id="worldCanvas" width="960" height="540"></canvas>
+
+    <div class="telemetry-pill">
+      FPS: <span id="fpsVal" class="fps">144</span> (Sodium) &nbsp;|&nbsp;
+      CPS: <span id="cpsVal" class="hl">0 / 0</span> &nbsp;|&nbsp;
+      GYRO: <span id="gyroVal">OFF</span> &nbsp;|&nbsp;
+      MODE: <span id="modeVal" class="mode">CROSSHAIR LOCK</span>
+    </div>
+
+    <div id="crosshair" class="crosshair"></div>
+
+    <!-- Dynamic HUD Buttons Container -->
+    <div id="hudContainer"></div>
+
+    <!-- Direct 9-Slot Hotbar -->
+    <div id="hotbar" class="hotbar"></div>
+
+    <!-- Simulated Inventory Modal (Demonstrating FabricStateBridge Auto-Switch) -->
+    <div id="guiModal" class="gui-modal">
+      <div class="inv-window">
+        <div class="inv-header">
+          <span>Inventory — Smart Touch Mode (Tanpa Kursor Palsu!)</span>
+          <button id="btnCloseGui" style="background:#ef4444;color:#fff;border:none;border-radius:4px;padding:4px 10px;cursor:pointer;font-weight:700;">ESC</button>
+        </div>
+        <p style="margin:0 0 8px 0;font-size:11px;color:#334155;">
+          Saat Inventory dibuka di Minecraft, <code>VeloCraftBridgeMod</code> otomatis mengirim paket UDP ke Android sehingga HUD menyembunyikan tombol PvP dan mengaktifkan <b>Tap Slot Langsung</b>:
+        </p>
+        <div id="invGrid" class="inv-grid"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="info-grid">
+    <div class="info-card">
+      <h3>1. Tanpa Launcher (Direct-to-Game)</h3>
+      Aplikasi langsung membuka <code>GameActivity.kt</code> + <code>SurfaceView</code> OpenGL ES 3.2. Proses setup aset & mod optimasi dilakukan otomatis di latar belakang pada pembukaan pertama.
+    </div>
+    <div class="info-card">
+      <h3>2. Optimasi Modern (Fabric 1.20.4)</h3>
+      Sudah tertanam profil otomatis <b>Sodium + Lithium + FerriteCore + ImmediatelyFast + EntityCulling + ModernFix</b> serta <i>CPU Performance Core Pinning</i> di C++.
+    </div>
+    <div class="info-card">
+      <h3>3. Lock-Free C++20 Input (&lt;0.5ms)</h3>
+      Semua ketukan tombol PvP, multi-touch 10 jari, dan sensor Gyro masuk ke <code>LockFreeInputQueue</code> tanpa <i>thread lock</i> untuk responsivitas setara PC.
+    </div>
+  </div>
+
+  <script>
+    const defaultButtons = [
+      { id: "move_w", label: "▲", x: 0.14, y: 0.56, r: 28, color: "#38bdf8", type: "hold" },
+      { id: "move_s", label: "▼", x: 0.14, y: 0.78, r: 28, color: "#38bdf8", type: "hold" },
+      { id: "move_a", label: "◀", x: 0.07, y: 0.67, r: 28, color: "#38bdf8", type: "hold" },
+      { id: "move_d", label: "▶", x: 0.21, y: 0.67, r: 28, color: "#38bdf8", type: "hold" },
+      { id: "sprint_lock", label: "SPRINT", x: 0.14, y: 0.41, r: 24, color: "#22c55e", type: "toggle", toggled: true },
+      { id: "sneak_toggle", label: "SNEAK", x: 0.06, y: 0.85, r: 24, color: "#f59e0b", type: "toggle" },
+      { id: "btn_attack", label: "ATK (L)", x: 0.81, y: 0.63, r: 40, color: "#ef4444", type: "left_click" },
+      { id: "btn_place", label: "PLACE (R)", x: 0.91, y: 0.50, r: 36, color: "#3b82f6", type: "right_click" },
+      { id: "btn_jump", label: "JUMP", x: 0.89, y: 0.77, r: 33, color: "#10b981", type: "hold" },
+      { id: "btn_offhand", label: "OFF (F)", x: 0.72, y: 0.79, r: 24, color: "#a855f7", type: "hold" },
+      { id: "btn_drop", label: "DROP (Q)", x: 0.73, y: 0.47, r: 22, color: "#38bdf8", type: "hold" },
+      { id: "btn_inv", label: "INV (E)", x: 0.84, y: 0.13, r: 22, color: "#eab308", type: "inv" },
+      { id: "btn_f5", label: "CAM (F5)", x: 0.25, y: 0.13, r: 21, color: "#38bdf8", type: "hold" },
+      { id: "btn_f3", label: "F3", x: 0.17, y: 0.13, r: 19, color: "#38bdf8", type: "hold" },
+      { id: "btn_gyro", label: "GYRO", x: 0.75, y: 0.13, r: 21, color: "#06b6d4", type: "gyro" }
+    ];
+
+    let buttons = JSON.parse(JSON.stringify(defaultButtons));
+    let isEditMode = false;
+    let isGuiOpen = false;
+    let gyroEnabled = false;
+    let activeSlot = 0;
+    let yaw = 0, pitch = 0;
+    let leftClicks = [], rightClicks = [];
+
+    const phoneFrame = document.getElementById("phoneFrame");
+    const hudContainer = document.getElementById("hudContainer");
+    const hotbarEl = document.getElementById("hotbar");
+    const guiModal = document.getElementById("guiModal");
+    const cpsVal = document.getElementById("cpsVal");
+    const gyroVal = document.getElementById("gyroVal");
+    const modeVal = document.getElementById("modeVal");
+
+    const hotbarItems = ["⚔️", "🧱", "🍎", "🏹", "🧨", "🪣", "💎", "🛡️", "⛏️"];
+
+    function renderHotbar() {
+      hotbarEl.innerHTML = "";
+      for (let i = 0; i < 9; i++) {
+        const slot = document.createElement("div");
+        slot.className = "hotbar-slot" + (i === activeSlot ? " selected" : "");
+        slot.innerHTML = `<span class="item-icon">${hotbarItems[i]}</span><span>${i + 1}</span>`;
+        slot.addEventListener("pointerdown", (e) => {
+          e.stopPropagation();
+          activeSlot = i;
+          renderHotbar();
+        });
+        hotbarEl.appendChild(slot);
+      }
+    }
+
+    function renderButtons() {
+      hudContainer.innerHTML = "";
+      buttons.forEach((b) => {
+        const el = document.createElement("div");
+        el.className = "hud-btn" + (b.toggled ? " toggled" : "");
+        el.style.left = (b.x * 100) + "%";
+        el.style.top = (b.y * 100) + "%";
+        el.style.width = (b.r * 2) + "px";
+        el.style.height = (b.r * 2) + "px";
+        el.style.borderColor = b.color;
+        el.textContent = b.label;
+
+        el.addEventListener("pointerdown", (e) => {
+          e.stopPropagation();
+          if (isEditMode) {
+            startDragButton(e, b, el);
+            return;
+          }
+          el.classList.add("pressed");
+          handleButtonAction(b, el);
+        });
+        el.addEventListener("pointerup", () => el.classList.remove("pressed"));
+        el.addEventListener("pointerleave", () => el.classList.remove("pressed"));
+        hudContainer.appendChild(el);
+      });
+    }
+
+    function handleButtonAction(b, el) {
+      const now = performance.now();
+      if (b.type === "left_click") {
+        leftClicks.push(now);
+        updateCpsDisplay();
+      } else if (b.type === "right_click") {
+        rightClicks.push(now);
+        updateCpsDisplay();
+      } else if (b.type === "toggle") {
+        b.toggled = !b.toggled;
+        el.classList.toggle("toggled", b.toggled);
+      } else if (b.type === "gyro") {
+        gyroEnabled = !gyroEnabled;
+        b.toggled = gyroEnabled;
+        el.classList.toggle("toggled", gyroEnabled);
+        gyroVal.textContent = gyroEnabled ? "ON (200Hz)" : "OFF";
+        gyroVal.style.color = gyroEnabled ? "#4ade80" : "#f8fafc";
+      } else if (b.type === "inv") {
+        toggleGuiModal(true);
+      }
+    }
+
+    function startDragButton(startEv, btnObj, el) {
+      const rect = phoneFrame.getBoundingClientRect();
+      function onMove(ev) {
+        const nx = Math.min(0.95, Math.max(0.05, (ev.clientX - rect.left) / rect.width));
+        const ny = Math.min(0.92, Math.max(0.08, (ev.clientY - rect.top) / rect.height));
+        btnObj.x = nx;
+        btnObj.y = ny;
+        el.style.left = (nx * 100) + "%";
+        el.style.top = (ny * 100) + "%";
+      }
+      function onUp() {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+      }
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+    }
+
+    function updateCpsDisplay() {
+      const now = performance.now();
+      leftClicks = leftClicks.filter(t => now - t < 1000);
+      rightClicks = rightClicks.filter(t => now - t < 1000);
+      cpsVal.textContent = `${leftClicks.length} L / ${rightClicks.length} R`;
+    }
+    setInterval(updateCpsDisplay, 200);
+
+    function toggleGuiModal(open) {
+      isGuiOpen = open;
+      guiModal.classList.toggle("open", open);
+      hudContainer.style.display = open ? "none" : "block";
+      modeVal.textContent = open ? "GUI TOUCH CURSOR" : (isEditMode ? "HUD EDITOR" : "CROSSHAIR LOCK");
+      document.getElementById("btnToggleGui").classList.toggle("active", open);
+    }
+
+    document.getElementById("btnToggleGui").addEventListener("click", () => toggleGuiModal(!isGuiOpen));
+    document.getElementById("btnCloseGui").addEventListener("click", () => toggleGuiModal(false));
+
+    document.getElementById("btnToggleEdit").addEventListener("click", (e) => {
+      isEditMode = !isEditMode;
+      phoneFrame.classList.toggle("edit-mode", isEditMode);
+      e.target.classList.toggle("active", isEditMode);
+      modeVal.textContent = isEditMode ? "HUD EDITOR (DRAG TOMBOL)" : "CROSSHAIR LOCK";
+    });
+
+    document.getElementById("btnResetHud").addEventListener("click", () => {
+      buttons = JSON.parse(JSON.stringify(defaultButtons));
+      renderButtons();
+    });
+
+    // Populate simulated inventory slots
+    const invGrid = document.getElementById("invGrid");
+    const sampleInv = ["⚔️","🏹","🍎","🧱","🧱","💎","🪣","🧨","🛡️","⛏️","🪓","🍖","🧪","🔮","🪶","🧭","⏳","📦"];
+    for (let i = 0; i < 27; i++) {
+      const cell = document.createElement("div");
+      cell.className = "inv-cell";
+      cell.textContent = sampleInv[i % sampleInv.length];
+      cell.addEventListener("click", () => {
+        cell.style.background = "#4ade80";
+        setTimeout(() => cell.style.background = "", 180);
+      });
+      invGrid.appendChild(cell);
+    }
+
+    // Free-look camera drag on the viewport canvas
+    const canvas = document.getElementById("worldCanvas");
+    const ctx = canvas.getContext("2d");
+    let lookDragging = false, lastX = 0, lastY = 0;
+
+    phoneFrame.addEventListener("pointerdown", (e) => {
+      if (isGuiOpen || isEditMode) return;
+      lookDragging = true;
+      lastX = e.clientX;
+      lastY = e.clientY;
+    });
+    window.addEventListener("pointermove", (e) => {
+      if (!lookDragging) return;
+      yaw += (e.clientX - lastX) * 0.45;
+      pitch = Math.max(-60, Math.min(60, pitch + (e.clientY - lastY) * 0.35));
+      lastX = e.clientX;
+      lastY = e.clientY;
+    });
+    window.addEventListener("pointerup", () => lookDragging = false);
+
+    function drawSimulatedWorld() {
+      const w = canvas.width, h = canvas.height;
+      const horizon = h * 0.5 - pitch * 3.2;
+
+      // Sky gradient
+      const sky = ctx.createLinearGradient(0, 0, 0, Math.max(0, horizon));
+      sky.addColorStop(0, "#0284c7");
+      sky.addColorStop(1, "#bae6fd");
+      ctx.fillStyle = sky;
+      ctx.fillRect(0, 0, w, Math.max(0, horizon));
+
+      // Ground (Minecraft voxel grid feel)
+      const ground = ctx.createLinearGradient(0, Math.max(0, horizon), 0, h);
+      ground.addColorStop(0, "#4d7c0f");
+      ground.addColorStop(1, "#1a2e05");
+      ctx.fillStyle = ground;
+      ctx.fillRect(0, Math.max(0, horizon), w, h - Math.max(0, horizon));
+
+      // Draw voxel perspective lines & target blocks
+      ctx.strokeStyle = "rgba(255,255,255,0.12)";
+      ctx.lineWidth = 1;
+      const offset = ((yaw % 40) + 40) % 40;
+      for (let x = -w; x < w * 2; x += 40) {
+        ctx.beginPath();
+        ctx.moveTo(w / 2 + (x - w / 2) * 0.2 - offset, horizon);
+        ctx.lineTo(x - offset * 3, h);
+        ctx.stroke();
+      }
+
+      // Draw a few floating PvP island blocks in distance
+      const blockX = (w / 2) - ((yaw % 360) * 3.2);
+      ctx.fillStyle = "#dc2626";
+      ctx.strokeStyle = "#1e293b";
+      ctx.lineWidth = 2;
+      ctx.fillRect(blockX - 45, horizon - 45, 90, 50);
+      ctx.strokeRect(blockX - 45, horizon - 45, 90, 50);
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 12px sans-serif";
+      ctx.fillText("TARGET PVP DUMMY", blockX - 58, horizon - 54);
+
+      requestAnimationFrame(drawSimulatedWorld);
+    }
+
+    renderHotbar();
+    renderButtons();
+    drawSimulatedWorld();
+  </script>
+</body>
+</html>

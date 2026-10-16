@@ -1,0 +1,89 @@
+{
+  "engineName": "VeloCraft Direct Engine",
+  "minecraftVersion": "1.20.4",
+  "fabricLoaderVersion": "0.16.7",
+  "javaTarget": 21,
+  "rendererBackend": "MobileGlues-GLES32",
+  "fallbackRendererBackend": "GL4ES-115",
+  "mojangManifestUrl": "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json",
+  "fabricMetaUrl": "https://meta.fabricmc.net/v2/versions/loader/1.20.4/0.16.7/profile/json",
+  "optimizationMods": [
+    {
+      "id": "fabric-api",
+      "name": "Fabric API",
+      "modrinthSlug": "fabric-api",
+      "version": "0.97.0+1.20.4",
+      "purpose": "Core hooks required by optimization mods and VeloCraft Bridge"
+    },
+    {
+      "id": "sodium",
+      "name": "Sodium",
+      "modrinthSlug": "sodium",
+      "version": "mc1.20.4-0.5.8",
+      "purpose": "Replaces vanilla chunk rendering pipeline with multidraw OpenGL ES 3.2 friendly shaders (+250% FPS)"
+    },
+    {
+      "id": "lithium",
+      "name": "Lithium",
+      "modrinthSlug": "lithium",
+      "version": "mc1.20.4-0.12.1",
+      "purpose": "Optimizes game physics, mob AI, chunk ticking, and block state lookups on mobile ARM CPUs"
+    },
+    {
+      "id": "ferritecore",
+      "name": "FerriteCore",
+      "modrinthSlug": "ferrite-core",
+      "version": "6.0.3-fabric",
+      "purpose": "Reduces RAM usage by ~45% via deduplicating blockstate and model memory structures"
+    },
+    {
+      "id": "immediatelyfast",
+      "name": "ImmediatelyFast",
+      "modrinthSlug": "immediatelyfast",
+      "version": "1.2.11+1.20.4",
+      "purpose": "Batches immediate-mode GUI, HUD, text, and entity rendering calls to eliminate mobile GPU stalls"
+    },
+    {
+      "id": "entityculling",
+      "name": "EntityCulling",
+      "modrinthSlug": "entityculling",
+      "version": "1.6.2-mc1.20.4",
+      "purpose": "Skips rendering entities and block-entities behind walls using async raytracing on secondary CPU cores"
+    },
+    {
+      "id": "modernfix",
+      "name": "ModernFix",
+      "modrinthSlug": "modernfix",
+      "version": "5.17.0+mc1.20.4",
+      "purpose": "Dynamic resource loading (cuts boot time in half and prevents OutOfMemory on 4GB/6GB phones)"
+    }
+  ],
+  "defaultOptionsTxt": {
+    "renderDistance": 6,
+    "simulationDistance": 5,
+    "entityDistanceScaling": 0.75,
+    "maxFps": 120,
+    "enableVsync": false,
+    "graphicsMode": "fast",
+    "clouds": "off",
+    "particles": "minimal",
+    "biomeBlendRadius": 1,
+    "mipmapLevels": 1,
+    "rawMouseInput": true,
+    "autoJump": false,
+    "guiScale": 2
+  },
+  "defaultSodiumOptions": {
+    "quality.weather_quality": "FAST",
+    "quality.leaves_quality": "FAST",
+    "quality.enable_vignette": false,
+    "performance.chunk_builder_threads": 2,
+    "performance.always_defer_chunk_updates": true,
+    "performance.animate_only_visible_textures": true,
+    "performance.use_entity_culling": true,
+    "performance.use_fog_occlusion": true,
+    "performance.use_compact_vertex_format": true,
+    "advanced.enable_memory_tracing": false,
+    "advanced.use_advanced_staging_buffers": true
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "velocraft-bridge",
+  "version": "0.1.0",
+  "name": "VeloCraft Android Native Bridge",
+  "description": "Zero-latency state & input bridge between Minecraft Java 1.20.4+ (Fabric) and VeloCraft Android Pro PvP HUD.",
+  "authors": [
+    "VeloCraft OpenSource Contributors"
+  ],
+  "license": "GPL-3.0",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "io.velocraft.mod.VeloCraftBridgeMod"
+    ]
+  },
+  "mixins": [
+    "velocraft.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.15.0",
+    "minecraft": "~1.20.4",
+    "java": ">=21"
+  }
+}
