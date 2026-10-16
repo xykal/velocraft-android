@@ -1,6 +1,7 @@
 package io.velocraft.mod;
 
 import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.loader.api.entrypoint.PreLaunchEntrypoint;
 
 import java.io.FileDescriptor;
 import java.io.FileOutputStream;
@@ -15,12 +16,13 @@ import java.nio.charset.StandardCharsets;
 /**
  * Client-side Fabric Companion Mod for VeloCraft Android (Minecraft 1.20.4).
  *
- * 1. Pre-verifies LWJGL 3 MemoryUtil (StdlibAllocator) and Blaze3D RenderSystem on the Render thread
- *    with unbuffered FileDescriptor.out logging so no initialization error can ever be masked by
- *    Minecraft.fillReport's secondary NoClassDefFoundError.
- * 2. Broadcasts lightweight UDP telemetry packets to 127.0.0.1:28465.
+ * 1. `onPreLaunch()`: Runs inside `KnotClassLoader` BEFORE `Main.main()` and `Bootstrap.wrapStreams()`.
+ *    Initializes `org.lwjgl.glfw.GLFW`, `org.lwjgl.system.Library`, and `org.lwjgl.system.MemoryUtil`
+ *    (`StdlibAllocator`) exclusively inside `KnotClassLoader` so `liblwjgl.so` is never loaded across
+ *    two different ClassLoaders (`AppClassLoader` vs `KnotClassLoader`).
+ * 2. `onInitializeClient()`: Verifies `RenderSystem` and starts the lightweight UDP telemetry bridge.
  */
-public final class VeloCraftBridgeMod implements ClientModInitializer {
+public final class VeloCraftBridgeMod implements PreLaunchEntrypoint, ClientModInitializer {
 
     public static final short MAGIC_HEADER = 0x5643; // "VC"
     public static final byte MODE_IN_GAME_CROSSHAIR = 0;
@@ -31,6 +33,7 @@ public final class VeloCraftBridgeMod implements ClientModInitializer {
     private static DatagramSocket udpSocket;
     private static InetAddress loopbackAddr;
     private static int bridgePort = 28465;
+    private static volatile boolean lwjglBootstrapped = false;
 
     static {
         try {
@@ -73,8 +76,8 @@ public final class VeloCraftBridgeMod implements ClientModInitializer {
         }
     }
 
-    @Override
-    public void onInitializeClient() {
+    private static synchronized void bootstrapLwjglInKnotClassLoader(String stageLabel) {
+        if (lwjglBootstrapped) return;
         System.setProperty("org.lwjgl.system.allocator", "system");
         System.setProperty("org.lwjgl.util.NoChecks", "true");
 
@@ -83,62 +86,64 @@ public final class VeloCraftBridgeMod implements ClientModInitializer {
         });
 
         ClassLoader cl = VeloCraftBridgeMod.class.getClassLoader();
-        try {
-            logRaw("Memverifikasi LWJGL 3 MemoryUtil (allocator=" +
-                System.getProperty("org.lwjgl.system.allocator") + ") di thread: " +
-                Thread.currentThread().getName());
-            Class.forName("org.lwjgl.system.MemoryUtil", true, cl);
-            Class.forName("org.lwjgl.system.MemoryUtil$LazyInit", true, cl);
-            Class.forName("org.lwjgl.system.MemoryStack", true, cl);
-            logRaw("LWJGL 3 MemoryUtil & MemoryStack siap.");
-        } catch (Throwable t) {
-            logThrowableChain("LWJGL MemoryUtil.<clinit>", t);
-        }
+        logRaw(stageLabel + ": Menginisialisasi LWJGL 3 di ClassLoader=" + cl);
 
         try {
-            logRaw("Menginisialisasi com.mojang.blaze3d.systems.RenderSystem...");
-            Class.forName("com.mojang.blaze3d.systems.RenderSystem", true, cl);
-            logRaw("com.mojang.blaze3d.systems.RenderSystem siap.");
+            Class.forName("org.lwjgl.glfw.GLFW", true, cl);
+            Class<?> memUtil = Class.forName("org.lwjgl.system.MemoryUtil", true, cl);
+            Class.forName("org.lwjgl.system.MemoryUtil$LazyInit", true, cl);
+            long ptr = (Long) memUtil.getMethod("memAllocAddress", int.class).invoke(null, 64);
+            memUtil.getMethod("nmemFree", long.class).invoke(null, ptr);
+            lwjglBootstrapped = true;
+            logRaw(stageLabel + ": LWJGL 3 Library, GLFW & MemoryUtil (StdlibAllocator) SIAP di KnotClassLoader (ptr=0x" +
+                Long.toHexString(ptr) + ").");
         } catch (Throwable t) {
-            logThrowableChain("RenderSystem.<clinit>", t);
+            logThrowableChain(stageLabel + "/LWJGL-Bootstrap", t);
         }
     }
 
-    public static void sendTelemetryState(
-            byte screenMode,
-            int activeHotbarSlot,
-            int clientFps,
-            int pingMs,
-            boolean isSprinting,
-            boolean isSneaking,
-            String screenSimpleName
+    @Override
+    public void onPreLaunch() {
+        bootstrapLwjglInKnotClassLoader("onPreLaunch");
+    }
+
+    @Override
+    public void onInitializeClient() {
+        bootstrapLwjglInKnotClassLoader("onInitializeClient");
+        ClassLoader cl = VeloCraftBridgeMod.class.getClassLoader();
+        try {
+            Class.forName("com.mojang.blaze3d.systems.RenderSystem", true, cl);
+            logRaw("Blaze3D RenderSystem berhasil diverifikasi di KnotClassLoader.");
+        } catch (Throwable t) {
+            logThrowableChain("RenderSystem.<clinit>", t);
+        }
+        sendTelemetryTick(MODE_GUI_CURSOR, 120, 20.0f, 0, "velocraft:bridge_active");
+    }
+
+    public static void sendTelemetryTick(
+        byte uiMode,
+        int fps,
+        float health,
+        int hotbarSlot,
+        String heldItemId
     ) {
         if (udpSocket == null || loopbackAddr == null) return;
-
         try {
-            byte[] nameBytes = screenSimpleName != null
-                    ? screenSimpleName.getBytes(StandardCharsets.UTF_8)
-                    : new byte[0];
-            int nameLen = Math.min(nameBytes.length, 64);
+            byte[] itemBytes = (heldItemId != null ? heldItemId : "minecraft:air")
+                .getBytes(StandardCharsets.UTF_8);
+            int len = Math.min(itemBytes.length, 64);
 
-            ByteBuffer buf = ByteBuffer.allocate(10 + nameLen).order(ByteOrder.BIG_ENDIAN);
+            ByteBuffer buf = ByteBuffer.allocate(16 + len).order(ByteOrder.LITTLE_ENDIAN);
             buf.putShort(MAGIC_HEADER);
-            buf.put(screenMode);
-            buf.put((byte) (activeHotbarSlot & 0xFF));
-            buf.putShort((short) (clientFps & 0xFFFF));
-            buf.putShort((short) (pingMs & 0xFFFF));
+            buf.put(uiMode);
+            buf.put((byte) (hotbarSlot & 0x0F));
+            buf.putInt(fps);
+            buf.putFloat(health);
+            buf.putInt(len);
+            buf.put(itemBytes, 0, len);
 
-            byte flags = 0;
-            if (isSprinting) flags |= 0x01;
-            if (isSneaking)  flags |= 0x02;
-            buf.put(flags);
-            buf.put((byte) nameLen);
-            if (nameLen > 0) {
-                buf.put(nameBytes, 0, nameLen);
-            }
-
-            byte[] payload = buf.array();
-            DatagramPacket packet = new DatagramPacket(payload, payload.length, loopbackAddr, bridgePort);
+            byte[] packetData = buf.array();
+            DatagramPacket packet = new DatagramPacket(packetData, packetData.length, loopbackAddr, bridgePort);
             udpSocket.send(packet);
         } catch (Exception ignored) {
         }

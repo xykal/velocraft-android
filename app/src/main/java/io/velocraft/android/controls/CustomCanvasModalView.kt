@@ -418,10 +418,10 @@ class CustomCanvasModalView(
         fastPlaceToggleRect.set(left, r2Y, left + halfW, r2Y + btnH)
         circleCrosshairToggleRect.set(left + halfW + dp(12f), r2Y, right, r2Y + btnH)
 
-        drawToggleBox(canvas, cursorToggleRect, "SHOW VIRTUAL CURSOR", hudView.isVirtualCursorEnabled)
-        drawToggleBox(canvas, autoClickToggleRect, "HOLD ATTACK AUTO-CLICK (14 CPS)", hudView.holdAutoClickEnabled)
+        drawToggleBox(canvas, cursorToggleRect, "TAMPILKAN KURSOR VIRTUAL", hudView.isVirtualCursorEnabled)
+        drawToggleBox(canvas, autoClickToggleRect, "TAHAN SERANG AUTO-CLICK (14 CPS)", hudView.holdAutoClickEnabled)
         drawToggleBox(canvas, fastPlaceToggleRect, "FASTPLACE / BRIDGING (15 CPS)", hudView.macroEngine.fastPlaceEnabled)
-        drawToggleBox(canvas, circleCrosshairToggleRect, "CIRCLE + DOT PRO CROSSHAIR", hudView.useProCircleCrosshair)
+        drawToggleBox(canvas, circleCrosshairToggleRect, "CROSSHAIR BAWAAN MINECRAFT (+)", !hudView.useProCircleCrosshair)
 
         // 4. Reset HUD Layout Button
         val r3Y = r2Y + btnH + dp(12f)

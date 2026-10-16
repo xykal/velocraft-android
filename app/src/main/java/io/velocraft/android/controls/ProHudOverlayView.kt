@@ -71,7 +71,7 @@ class ProHudOverlayView @JvmOverloads constructor(
     // PvP Combat Automation & CPS Counter
     val macroEngine = MacroEngine()
     var holdAutoClickEnabled: Boolean = true
-    var useProCircleCrosshair: Boolean = true
+    var useProCircleCrosshair: Boolean = false
     private var isHoldingLeftAttack = false
     private var isHoldingRightPlace = false
 
@@ -191,9 +191,9 @@ class ProHudOverlayView @JvmOverloads constructor(
 
         if (isEditMode) {
             drawEditorGrid(canvas, w, h)
-        } else {
-            drawCenterCrosshair(canvas, w / 2f, h / 2f)
         }
+        // Note: No custom center crosshair is drawn here during gameplay because
+        // Minecraft Java Edition already renders its own built-in '+' crosshair.
 
         drawHotbarBar(canvas, w, h)
         drawTopTelemetryPill(canvas, w)
@@ -205,24 +205,50 @@ class ProHudOverlayView @JvmOverloads constructor(
             val isPressed = activeButtons.contains(btn.id) || toggledButtons.contains(btn.id)
             val isSelectedInEditor = isEditMode && selectedEditButton?.id == btn.id
 
+            // Outer shadow/backing ring for better contrast over bright sky/terrain
+            bgFillPaint.color = modulateAlpha(0xFF10100E.toInt(), (btn.opacity * 0.48f).coerceAtMost(0.65f))
+            canvas.drawCircle(cx, cy, r + dp(1.8f), bgFillPaint)
+
+            // Main matte button surface
             bgFillPaint.color = if (isPressed) {
-                 modulateAlpha(btn.accentHex, 0.72f)
+                modulateAlpha(btn.accentHex, 0.78f)
             } else {
-                modulateAlpha(0xFF1E1D1B.toInt(), btn.opacity * 0.78f)
+                modulateAlpha(0xFF1B1A18.toInt(), btn.opacity * 0.82f)
             }
             canvas.drawCircle(cx, cy, r, bgFillPaint)
 
+            // Subtle inner bevel ring
+            strokePaint.color = if (isPressed) {
+                0x55FFFFFF
+            } else {
+                modulateAlpha(btn.accentHex, 0.30f)
+            }
+            strokePaint.strokeWidth = dp(1f)
+            canvas.drawCircle(cx, cy, (r - dp(3.2f)).coerceAtLeast(dp(4f)), strokePaint)
+
+            // Outer crisp stroke ring
             strokePaint.color = when {
                 isSelectedInEditor -> 0xFFF4F1EA.toInt()
                 isPressed -> 0xFFF4F1EA.toInt()
-                else -> modulateAlpha(btn.accentHex, 0.85f)
+                else -> modulateAlpha(btn.accentHex, 0.88f)
             }
-            strokePaint.strokeWidth = if (isSelectedInEditor || isPressed) dp(2.4f) else dp(1.4f)
+            strokePaint.strokeWidth = if (isSelectedInEditor || isPressed) dp(2.2f) else dp(1.4f)
             canvas.drawCircle(cx, cy, r, strokePaint)
 
-            textPaint.textSize = if (btn.label.length > 6) dp(9.5f) else dp(11.5f)
+            // Auto-fitted button label
+            textPaint.textSize = when {
+                btn.label.length >= 7 -> dp(9.0f)
+                btn.label.length >= 5 -> dp(10.0f)
+                else -> dp(11.5f)
+            }
+            val maxLabelW = r * 1.68f
+            var labelStr = btn.label
+            while (labelStr.length > 2 && textPaint.measureText(labelStr) > maxLabelW) {
+                textPaint.textSize = (textPaint.textSize - dp(0.5f)).coerceAtLeast(dp(7.5f))
+                if (textPaint.textSize <= dp(7.5f)) break
+            }
             val textY = cy - (textPaint.descent() + textPaint.ascent()) / 2f
-            canvas.drawText(btn.label, cx, textY, textPaint)
+            canvas.drawText(labelStr, cx, textY, textPaint)
         }
 
         if (isEditMode) {
@@ -231,21 +257,6 @@ class ProHudOverlayView @JvmOverloads constructor(
 
         if (isVirtualCursorEnabled && !isEditMode) {
             drawVirtualMouseCursor(canvas, virtualCursorX, virtualCursorY)
-        }
-    }
-
-    private fun drawCenterCrosshair(canvas: Canvas, cx: Float, cy: Float) {
-        if (useProCircleCrosshair) {
-            val radius = dp(10f)
-            crosshairPaint.color = if (isHoldingLeftAttack) 0xFFD96B52.toInt() else 0xB8F4F1EA.toInt()
-            canvas.drawCircle(cx, cy, radius, crosshairPaint)
-            bgFillPaint.color = 0xFFF4F1EA.toInt()
-            canvas.drawCircle(cx, cy, dp(1.8f), bgFillPaint)
-        } else {
-            val arm = dp(7f)
-            crosshairPaint.color = 0xD9F4F1EA.toInt()
-            canvas.drawLine(cx - arm, cy, cx + arm, cy, crosshairPaint)
-            canvas.drawLine(cx, cy - arm, cx, cy + arm, crosshairPaint)
         }
     }
 
@@ -277,30 +288,35 @@ class ProHudOverlayView @JvmOverloads constructor(
             canvas.drawLine(0f, y, w, y, gridPaint)
             y += step
         }
+        // Center alignment guides in HUD Editor mode only
+        crosshairPaint.color = 0x55C87D55
+        canvas.drawLine(w * 0.5f, 0f, w * 0.5f, h, crosshairPaint)
+        canvas.drawLine(0f, h * 0.5f, w, h * 0.5f, crosshairPaint)
     }
 
     private fun drawEditorTopToolbar(canvas: Canvas, w: Float) {
-        val barW = dp(520f).coerceAtMost(w * 0.94f)
-        val barH = dp(38f)
+        val barW = dp(530f).coerceAtMost(w * 0.94f)
+        val barH = dp(40f)
         val left = (w - barW) * 0.5f
-        val top = dp(44f)
+        val top = dp(42f)
         val barRect = RectF(left, top, left + barW, top + barH)
-        canvas.drawRoundRect(barRect, dp(8f), dp(8f), hudBannerPaint)
+        canvas.drawRoundRect(barRect, dp(9f), dp(9f), hudBannerPaint)
         strokePaint.color = 0xFFC87D55.toInt()
-        canvas.drawRoundRect(barRect, dp(8f), dp(8f), strokePaint)
+        strokePaint.strokeWidth = dp(1.4f)
+        canvas.drawRoundRect(barRect, dp(9f), dp(9f), strokePaint)
 
         val gap = dp(5f)
         val itemW = (barW - gap * 7f) / 6f
-        val itemTop = top + dp(4f)
-        val itemBottom = top + barH - dp(4f)
+        val itemTop = top + dp(4.5f)
+        val itemBottom = top + barH - dp(4.5f)
 
         val rects = listOf(
-            editAddKeyRect to "+ ADD KEY",
+            editAddKeyRect to "+ TOMBOL",
             editBindKeyRect to "BIND KEY",
-            editSizeMinusRect to "SIZE -",
-            editSizePlusRect to "SIZE +",
-            editDeleteKeyRect to "DELETE",
-            editSaveHudRect to "SAVE HUD"
+            editSizeMinusRect to "UKURAN -",
+            editSizePlusRect to "UKURAN +",
+            editDeleteKeyRect to "HAPUS",
+            editSaveHudRect to "SIMPAN HUD"
         )
         for ((idx, pair) in rects.withIndex()) {
             val rLeft = left + gap + idx * (itemW + gap)
@@ -311,52 +327,72 @@ class ProHudOverlayView @JvmOverloads constructor(
                 else -> 0xFF2D2B28.toInt()
             }
             canvas.drawRoundRect(pair.first, dp(6f), dp(6f), bgFillPaint)
-            textPaint.textSize = dp(9.8f)
-            canvas.drawText(pair.second, pair.first.centerX(), pair.first.centerY() + dp(3.5f), textPaint)
+            textPaint.textSize = dp(9.5f)
+            canvas.drawText(pair.second, pair.first.centerX(), pair.first.centerY() + dp(3.4f), textPaint)
         }
     }
 
     private fun drawHotbarBar(canvas: Canvas, w: Float, h: Float) {
-        val barWidth = w * 0.42f
-        val barHeight = dp(38f)
+        val barWidth = (w * 0.40f).coerceIn(dp(260f), dp(420f))
+        val barHeight = dp(34f)
         val left = (w - barWidth) / 2f
-        val top = h - barHeight - dp(10f)
+        val top = h - barHeight - dp(8f)
         hotbarRect.set(left, top, left + barWidth, top + barHeight)
 
         canvas.drawRoundRect(hotbarRect, dp(8f), dp(8f), hudBannerPaint)
+        strokePaint.color = 0x6658544C
+        strokePaint.strokeWidth = dp(1f)
+        canvas.drawRoundRect(hotbarRect, dp(8f), dp(8f), strokePaint)
+
         val slotWidth = barWidth / 9f
         for (i in 0 until 9) {
             val sLeft = left + i * slotWidth
-            val slotRect = RectF(sLeft + dp(2f), top + dp(2f), sLeft + slotWidth - dp(2f), top + barHeight - dp(2f))
-            strokePaint.color = if (i == activeHotbarSlot) 0xFF4E8C57.toInt() else 0x5578736A
-            strokePaint.strokeWidth = if (i == activeHotbarSlot) dp(2f) else dp(1f)
-            canvas.drawRoundRect(slotRect, dp(5f), dp(5f), strokePaint)
+            val isSelected = (i == activeHotbarSlot)
+            val slotRect = RectF(
+                sLeft + dp(2.2f),
+                top + dp(2.2f),
+                sLeft + slotWidth - dp(2.2f),
+                top + barHeight - dp(2.2f)
+            )
+            if (isSelected) {
+                bgFillPaint.color = 0x384E8C57
+                canvas.drawRoundRect(slotRect, dp(5.5f), dp(5.5f), bgFillPaint)
+            }
+            strokePaint.color = if (isSelected) 0xFF5FA869.toInt() else 0x4478736A
+            strokePaint.strokeWidth = if (isSelected) dp(1.8f) else dp(1f)
+            canvas.drawRoundRect(slotRect, dp(5.5f), dp(5.5f), strokePaint)
 
-            textPaint.textSize = dp(10f)
-            canvas.drawText("${i + 1}", slotRect.centerX(), slotRect.centerY() + dp(4f), textPaint)
+            textPaint.textSize = if (isSelected) dp(10.5f) else dp(9.5f)
+            textPaint.color = if (isSelected) 0xFFF4F1EA.toInt() else 0xFFB8B2A6.toInt()
+            canvas.drawText("${i + 1}", slotRect.centerX(), slotRect.centerY() + dp(3.6f), textPaint)
         }
+        textPaint.color = 0xFFF4F1EA.toInt()
     }
 
     private fun drawTopTelemetryPill(canvas: Canvas, w: Float) {
-        val pillW = dp(380f).coerceAtMost(w * 0.72f)
+        val pillW = dp(410f).coerceAtMost(w * 0.74f)
         val pillH = dp(26f)
         val left = (w - pillW) / 2f
-        val top = dp(10f)
+        val top = dp(8f)
         val rect = RectF(left, top, left + pillW, top + pillH)
-        canvas.drawRoundRect(rect, dp(6f), dp(6f), hudBannerPaint)
-        strokePaint.color = 0x6678736A
+        canvas.drawRoundRect(rect, dp(7f), dp(7f), hudBannerPaint)
+        strokePaint.color = 0x7758544C
         strokePaint.strokeWidth = dp(1f)
-        canvas.drawRoundRect(rect, dp(6f), dp(6f), strokePaint)
+        canvas.drawRoundRect(rect, dp(7f), dp(7f), strokePaint)
 
-        textPaint.textSize = dp(10f)
+        // Subtle status dot on left of telemetry pill
+        bgFillPaint.color = if (isVirtualCursorEnabled) 0xFFC87D55.toInt() else 0xFF5FA869.toInt()
+        canvas.drawCircle(left + dp(12f), rect.centerY(), dp(3.5f), bgFillPaint)
+
+        textPaint.textSize = dp(9.6f)
         val gyroState = if (toggledButtons.contains("btn_gyro")) "GYRO:ON" else "GYRO:OFF"
-        val curState = if (isVirtualCursorEnabled) "CURSOR:ON" else "CURSOR:OFF"
+        val curState = if (isVirtualCursorEnabled) "KURSOR:ON" else "KURSOR:OFF"
         val cpsL = macroEngine.getLeftCps()
         val cpsR = macroEngine.getRightCps()
         canvas.drawText(
-            "Minecraft 1.20.4 ($activeRendererLabel) | $currentFps FPS | $cpsL/$cpsR CPS | $curState | $gyroState",
-            rect.centerX(),
-            rect.centerY() + dp(3.8f),
+            "MC 1.20.4 ($activeRendererLabel)  |  $currentFps FPS  |  $cpsL/$cpsR CPS  |  $curState  |  $gyroState",
+            rect.centerX() + dp(5f),
+            rect.centerY() + dp(3.5f),
             textPaint
         )
     }

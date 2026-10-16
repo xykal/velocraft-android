@@ -270,16 +270,25 @@ class MainMenuView @JvmOverloads constructor(
                 dp(7f),
                 if (isSelected) accentGreenPaint else cardPaint
             )
-            if (!isSelected) {
+            if (isSelected) {
+                dstRect.set(
+                    navRects[idx].left + dp(3.5f),
+                    navRects[idx].top + dp(5f),
+                    navRects[idx].left + dp(6.8f),
+                    navRects[idx].bottom - dp(5f)
+                )
+                bodyBoldPaint.color = 0xFFF4F1EA.toInt()
+                canvas.drawRoundRect(dstRect, dp(2f), dp(2f), bodyBoldPaint)
+            } else {
                 canvas.drawRoundRect(navRects[idx], dp(7f), dp(7f), borderPaint)
             }
             btnTextPaint.textAlign = Paint.Align.LEFT
             drawFittedText(
                 canvas,
                 page.label,
-                navRects[idx].left + dp(12f),
+                navRects[idx].left + dp(13f),
                 navRects[idx].centerY() + dp(3.8f),
-                navRects[idx].width() - dp(20f),
+                navRects[idx].width() - dp(22f),
                 btnTextPaint
             )
             btnTextPaint.textAlign = Paint.Align.CENTER
@@ -288,7 +297,7 @@ class MainMenuView @JvmOverloads constructor(
         // Subtle version footer at bottom of sidebar
         drawFittedText(
             canvas,
-            "v0.7.1-release | ${if (android.os.Process.is64Bit()) "ARM64" else "ARM32"}",
+            "v0.7.6-release | ${if (android.os.Process.is64Bit()) "ARM64" else "ARM32"}",
             sbPad,
             h - dp(12f),
             sidebarW - sbPad * 2f,
@@ -417,7 +426,7 @@ class MainMenuView @JvmOverloads constructor(
         val cardW = (totalW - gap * 3f) / 4f
 
         val statusItems = listOf(
-            Triple("OpenJDK 21 Runtime", readiness.isOpenJdkRuntimeReady, if (readiness.isOpenJdkRuntimeReady) "Siap (${hw.abi})" else "Belum Terpasang"),
+            Triple("OpenJDK 17 Runtime", readiness.isOpenJdkRuntimeReady, if (readiness.isOpenJdkRuntimeReady) "Siap (${hw.abi})" else "Belum Terpasang"),
             Triple("Client 1.20.4 & Libs", readiness.isClientJarReady, if (readiness.isClientJarReady) "Terverifikasi" else "Perlu Diunduh"),
             Triple("Mod Optimasi & Iris", readiness.installedModsCount >= 6, "${readiness.installedModsCount}/8 Mod Terpasang"),
             Triple("Asset Suara & Tekstur", readiness.isAssetIndexReady, if (readiness.isAssetIndexReady) "Index 12.json Siap" else "Belum Lengkap")
@@ -429,10 +438,15 @@ class MainMenuView @JvmOverloads constructor(
             canvas.drawRoundRect(tmpRect, dp(8f), dp(8f), cardPaint)
             canvas.drawRoundRect(tmpRect, dp(8f), dp(8f), if (item.second) activeBorderPaint else borderPaint)
 
-            val badgeText = if (item.second) "[SIAP]" else "[BELUM]"
-            bodyBoldPaint.color = if (item.second) 0xFF68B672.toInt() else 0xFFC87D55.toInt()
-            drawFittedText(canvas, badgeText, cLeft + dp(10f), gridTop + dp(20f), cardW - dp(20f), bodyBoldPaint)
-            bodyBoldPaint.color = 0xFFF4F1EA.toInt()
+            // Pill badge inside top-left of card
+            val badgeText = if (item.second) "SIAP" else "BELUM"
+            val badgeW = dp(48f)
+            val badgeH = dp(15f)
+            dstRect.set(cLeft + dp(10f), gridTop + dp(7f), cLeft + dp(10f) + badgeW, gridTop + dp(7f) + badgeH)
+            canvas.drawRoundRect(dstRect, dp(4f), dp(4f), if (item.second) accentGreenPaint else accentTerraPaint)
+            btnTextPaint.textSize = dp(8.8f)
+            canvas.drawText(badgeText, dstRect.centerX(), dstRect.centerY() + dp(3.1f), btnTextPaint)
+            btnTextPaint.textSize = dp(10.8f)
 
             drawFittedText(canvas, item.first, cLeft + dp(10f), gridTop + dp(36f), cardW - dp(20f), bodyBoldPaint)
             drawFittedText(canvas, item.third, cLeft + dp(10f), gridTop + dp(50f), cardW - dp(20f), mutedPaint)
@@ -470,7 +484,7 @@ class MainMenuView @JvmOverloads constructor(
         val progY = modeY + modeBtnH + dp(16f)
         val statusStr = when {
             downloadState.isRunning -> "Mengunduh ($pct%): ${downloadState.phaseTitle} - ${downloadState.detailText}"
-            readiness.isReadyToLaunch -> "Seluruh file Engine & OpenJDK 21 siap. Ketuk tombol di kanan untuk mulai bermain."
+            readiness.isReadyToLaunch -> "Seluruh file Engine & OpenJDK 17 siap. Ketuk tombol di kanan untuk mulai bermain."
             else -> "Mode Hemat membuat stub .ogg hening 108-byte yang 100% aman tanpa risiko crash suara."
         }
         drawFittedText(canvas, statusStr, innerL, progY, leftZoneW, bodyPaint)
@@ -493,6 +507,7 @@ class MainMenuView @JvmOverloads constructor(
             else -> accentGreenPaint
         }
         canvas.drawRoundRect(homePrimaryActionRect, dp(9f), dp(9f), actionPaint)
+        canvas.drawRoundRect(homePrimaryActionRect, dp(9f), dp(9f), activeBorderPaint)
 
         val mainBtnTitle = when {
             downloadState.isRunning -> "UNDUHAN BERJALAN ($pct%)"
@@ -504,17 +519,16 @@ class MainMenuView @JvmOverloads constructor(
             readiness.isReadyToLaunch -> "Luncurkan Minecraft 1.20.4 (${hw.allocatedHeapMb} MB)"
             else -> if (skipMusicLite) "Paket Hemat ~245 MB (Resume Aktif)" else "Paket Penuh ~695 MB (Resume Aktif)"
         }
-        btnTextPaint.textSize = dp(13f)
+        btnTextPaint.textSize = dp(13.2f)
         canvas.drawText(mainBtnTitle, homePrimaryActionRect.centerX(), homePrimaryActionRect.centerY() - dp(3f), btnTextPaint)
-        btnTextPaint.textSize = dp(10.8f)
-        drawFittedText(
-            canvas,
-            mainBtnSub,
-            homePrimaryActionRect.left + dp(10f),
-            homePrimaryActionRect.centerY() + dp(14f),
-            homePrimaryActionRect.width() - dp(20f),
-            bodyPaint
+        btnTextPaint.textSize = dp(9.8f)
+        canvas.drawText(
+            fitText(mainBtnSub, btnTextPaint, homePrimaryActionRect.width() - dp(20f)),
+            homePrimaryActionRect.centerX(),
+            homePrimaryActionRect.centerY() + dp(13f),
+            btnTextPaint
         )
+        btnTextPaint.textSize = dp(10.8f)
     }
 
     // =========================================================================

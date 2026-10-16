@@ -76,7 +76,7 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        VeloLogger.section("BOOT", "GameActivity.onCreate() started (v0.7.3-release Specific Boot Telemetry & Mojang Splash ETA)")
+        VeloLogger.section("BOOT", "GameActivity.onCreate() started (v0.7.6-release KnotClassLoader LWJGL Fix & Refined UI)")
 
         val hw = JvmOptimizer.detectHardware(this)
         val effectiveRenderer = RendererProfileManager.resolveEffectiveBackend(this)

@@ -777,9 +777,13 @@ static jlong ndlopen_bugfix(JNIEnv* /*env*/, jclass /*cls*/, jlong filename_ptr,
 }
 
 /**
- * Registers `DynamicLinkLoader.ndlopen` right after `JNI_CreateJavaVM`
- * and pre-initializes `APIUtil`, `MemoryUtil`, and `MemoryUtil$LazyInit` (`StdlibAllocator`)
- * BEFORE `Bootstrap.wrapStreams()` wraps `System.err`, and WITHOUT loading `org.lwjgl.glfw.GLFW` prematurely!
+ * Registers `DynamicLinkLoader.ndlopen` inside the active caller ClassLoader (`KnotClassLoader`)
+ * and pre-initializes `APIUtil`, `MemoryUtil`, and `MemoryUtil$LazyInit` (`StdlibAllocator`).
+ *
+ * IMPORTANT: Never call this from `jvmDirectMainThread` before `KnotClient.main()` starts,
+ * because JNI `FindClass` with no Java caller frame on the stack defaults to `AppClassLoader`,
+ * which would load `liblwjgl.so` in `AppClassLoader` and cause `KnotClassLoader` to fail with
+ * `UnsatisfiedLinkError: Native Library .../liblwjgl.so already loaded in another classloader`!
  */
 void registerLwjglDlopenHookOnly(JNIEnv* vmEnv) {
     if (!vmEnv) return;
@@ -810,23 +814,25 @@ void registerLwjglDlopenHookOnly(JNIEnv* vmEnv) {
     } else {
         appendNativeLineToLogFile(
             "BOOT",
-            "LWJGL 3 MemoryUtil & StdlibAllocator berhasil diinisialisasi di awal."
+            "LWJGL 3 MemoryUtil & StdlibAllocator berhasil diinisialisasi di KnotClassLoader."
         );
     }
 }
 
 /**
- * Lazily binds `org.lwjgl.glfw.GLFW` buffers and monitor methods once GLFW is actually initialized by Minecraft.
+ * Binds `org.lwjgl.glfw.GLFW` buffers and monitor methods inside `KnotClassLoader`.
  */
 void bindGlfwBuffersAndMethods(JNIEnv* vmEnv) {
     if (!vmEnv) return;
     SharedEngineState* st = getSharedState();
     registerLwjglDlopenHookOnly(vmEnv);
 
-    if (!st->vmGlfwClass) {
+    if (!st->vmGlfwClass || !st->glfwKeyDownBuffer || !st->glfwMouseDownBuffer) {
         jclass glfwCls = vmEnv->FindClass("org/lwjgl/glfw/GLFW");
         if (glfwCls) {
-            st->vmGlfwClass = reinterpret_cast<jclass>(vmEnv->NewGlobalRef(glfwCls));
+            if (!st->vmGlfwClass) {
+                st->vmGlfwClass = reinterpret_cast<jclass>(vmEnv->NewGlobalRef(glfwCls));
+            }
             st->methodInternalChangeMonitorSize = vmEnv->GetStaticMethodID(
                 st->vmGlfwClass, "internalChangeMonitorSize", "(II)V"
             );
@@ -846,6 +852,11 @@ void bindGlfwBuffersAndMethods(JNIEnv* vmEnv) {
                 if (mouseBuf) {
                     st->glfwMouseDownBuffer = reinterpret_cast<jbyte*>(vmEnv->GetDirectBufferAddress(mouseBuf));
                 }
+            }
+            int w = st->surfaceWidth.load(std::memory_order_relaxed);
+            int h = st->surfaceHeight.load(std::memory_order_relaxed);
+            if (w > 0 && h > 0 && st->methodInternalChangeMonitorSize) {
+                vmEnv->CallStaticVoidMethod(st->vmGlfwClass, st->methodInternalChangeMonitorSize, w, h);
             }
         }
         vmEnv->ExceptionClear();
@@ -1044,8 +1055,11 @@ void* jvmDirectMainThread(void* rawCtx) {
             " ms! (Kelas dasar dimuat: " + std::to_string(st->loadedClassCount.load()) + " kelas)"
     );
 
-    // Register ONLY DynamicLinkLoader.ndlopen without prematurely triggering GLFW.<clinit>!
-    registerLwjglDlopenHookOnly(vmEnv);
+    // NOTE: Do NOT call vmEnv->FindClass("org/lwjgl/...") here in jvmDirectMainThread!
+    // At this point there is no Java frame on the stack, so JNI FindClass uses AppClassLoader,
+    // which would load liblwjgl.so in AppClassLoader and cause KnotClassLoader to throw
+    // UnsatisfiedLinkError: Native Library .../liblwjgl.so already loaded in another classloader!
+    // Instead, LWJGL is initialized inside KnotClassLoader via VeloCraftBridgeMod.onPreLaunch() & JNI_OnLoad.
 
     pthread_t hbTid;
     if (pthread_create(&hbTid, nullptr, jvmHeartbeatMonitorThread, nullptr) == 0) {
@@ -1142,8 +1156,21 @@ void* jvmDirectMainThread(void* rawCtx) {
 
 static void gl4esGetMainFbSize(int* width, int* height) {
     SharedEngineState* st = getSharedState();
-    if (width) *width = st->surfaceWidth.load(std::memory_order_relaxed);
-    if (height) *height = st->surfaceHeight.load(std::memory_order_relaxed);
+    EGLint qw = 0;
+    EGLint qh = 0;
+    if (st->eglDisplay != EGL_NO_DISPLAY && st->eglSurface != EGL_NO_SURFACE) {
+        if (eglQuerySurface(st->eglDisplay, st->eglSurface, EGL_WIDTH, &qw) == EGL_TRUE &&
+            eglQuerySurface(st->eglDisplay, st->eglSurface, EGL_HEIGHT, &qh) == EGL_TRUE &&
+            qw > 0 && qh > 0) {
+            if (width) *width = qw;
+            if (height) *height = qh;
+            return;
+        }
+    }
+    int sw = st->surfaceWidth.load(std::memory_order_relaxed);
+    int sh = st->surfaceHeight.load(std::memory_order_relaxed);
+    if (width) *width = (sw > 0) ? sw : 1280;
+    if (height) *height = (sh > 0) ? sh : 720;
 }
 
 } // anonymous namespace
@@ -1158,8 +1185,8 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* /*reserved*/) {
         st->runtimeJavaVM.store(vm, std::memory_order_release);
         JNIEnv* vmEnv = nullptr;
         if (vm->GetEnv(reinterpret_cast<void**>(&vmEnv), JNI_VERSION_1_4) == JNI_OK && vmEnv) {
-            appendNativeLineToLogFile("GLFW", "JNI_OnLoad dipanggil oleh OpenJDK HotSpot VM.");
-            registerLwjglDlopenHookOnly(vmEnv);
+            appendNativeLineToLogFile("GLFW", "JNI_OnLoad dipanggil oleh OpenJDK HotSpot VM (KnotClassLoader).");
+            bindGlfwBuffersAndMethods(vmEnv);
         }
     }
     return JNI_VERSION_1_6;

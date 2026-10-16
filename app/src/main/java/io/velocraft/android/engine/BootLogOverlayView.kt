@@ -46,6 +46,7 @@ class BootLogOverlayView(
 
     private var currentSubTaskDetail: String = "Memverifikasi konfigurasi OpenJDK 17, Mod Fabric & Renderer..."
     private var currentActiveClass: String = "io.velocraft.android.engine.DirectBootProvisioner"
+    private var currentStageIndex: Int = 1
     private var loadedClasses: Int = 0
     private var targetSplashClasses: Int = 5400
     private var classesPerSec: Int = 0
@@ -161,6 +162,7 @@ class BootLogOverlayView(
     private fun pullNativeTelemetrySnapshot() {
         val snap = NativeEngineBridge.getBootTelemetry() ?: return
         if (!isJvmExited && snap.stageIndex >= 1) {
+            currentStageIndex = snap.stageIndex.coerceIn(1, 10)
             if (snap.stageTitle.isNotBlank()) {
                 bootStageTitle = snap.stageTitle
             }
@@ -317,8 +319,8 @@ class BootLogOverlayView(
         )
         titlePaint.color = Color.parseColor("#F8FAFC")
 
-        curY += u * 0.028f
-        val barH = u * 0.017f
+        curY += u * 0.026f
+        val barH = u * 0.015f
         progressTrackRect.set(left, curY, right, curY + barH)
         canvas.drawRoundRect(progressTrackRect, 8f, 8f, progressTrackPaint)
 
@@ -326,7 +328,23 @@ class BootLogOverlayView(
         progressFillRect.set(left, curY, left + fillW, curY + barH)
         canvas.drawRoundRect(progressFillRect, 8f, 8f, progressFillPaint)
 
-        curY += barH + innerPad * 0.42f
+        // 10-Segment Stage Pill Strip (TAHAP 1..10)
+        curY += barH + u * 0.008f
+        val segGap = u * 0.007f
+        val segW = (right - left - segGap * 9f) / 10f
+        val segH = u * 0.008f
+        for (s in 1..10) {
+            val sLeft = left + (s - 1) * (segW + segGap)
+            progressFillRect.set(sLeft, curY, sLeft + segW, curY + segH)
+            canvas.drawRoundRect(
+                progressFillRect,
+                4f,
+                4f,
+                if (s <= currentStageIndex) progressFillPaint else progressTrackPaint
+            )
+        }
+
+        curY += segH + innerPad * 0.34f
 
         // 3. Three Dedicated ETA & Live Telemetry Cards
         val cardGap = u * 0.014f
