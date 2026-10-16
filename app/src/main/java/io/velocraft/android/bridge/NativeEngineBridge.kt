@@ -96,6 +96,8 @@ object NativeEngineBridge {
     external fun nativeSendCameraDelta(deltaX: Float, deltaY: Float)
     external fun nativeSendCursorPos(x: Float, y: Float)
     external fun nativeSetCursorGrabbed(grabbed: Boolean)
+    external fun nativeIsCursorGrabbed(): Boolean
+    external fun nativeSendScroll(xOffset: Float, yOffset: Float)
     external fun nativeConfigureRendererEnv(jreHomePath: String, rendererLibName: String, cacheDirPath: String)
     external fun nativeLaunchDirectJvm(jliLibPath: String, jvmArgsArray: Array<String>): Int
     external fun nativeGetArchitectureAbi(): String
@@ -197,6 +199,24 @@ object NativeEngineBridge {
             nativeSetCursorGrabbed(grabbed)
         } catch (t: Throwable) {
             VeloLogger.error("nativeSetCursorGrabbed error", t)
+        }
+    }
+
+    fun isCursorGrabbed(): Boolean {
+        if (!isNativeLoaded) return false
+        return try {
+            nativeIsCursorGrabbed()
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    fun sendScroll(xOffset: Float, yOffset: Float) {
+        if (!isNativeLoaded) return
+        try {
+            nativeSendScroll(xOffset, yOffset)
+        } catch (t: Throwable) {
+            VeloLogger.error("nativeSendScroll error", t)
         }
     }
 

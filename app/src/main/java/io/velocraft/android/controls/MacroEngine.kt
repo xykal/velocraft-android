@@ -6,7 +6,8 @@ import io.velocraft.android.bridge.NativeEngineBridge
 import kotlin.random.Random
 
 /**
- * High-Speed PvP Macro, CPS Counter, Bridging Assist & Complete PC 104-Key GLFW Lookup Table.
+ * High-Speed PvP Macro, CPS Counter, Bridging Assist, Debug Shortcuts (F3+B/G/A, Ctrl+Q)
+ * & Complete Categorized PC 104-Key GLFW Lookup Table.
  */
 class MacroEngine {
 
@@ -28,7 +29,9 @@ class MacroEngine {
             if (!isLeftAutoClicking) return
             registerManualLeftClick()
             NativeEngineBridge.sendMouseButton(NativeEngineBridge.MOUSE_LEFT, true)
-            NativeEngineBridge.sendMouseButton(NativeEngineBridge.MOUSE_LEFT, false)
+            handler.postDelayed({
+                NativeEngineBridge.sendMouseButton(NativeEngineBridge.MOUSE_LEFT, false)
+            }, 28L)
             leftTickCallback?.invoke()
             val delayMs = 68L + Random.nextLong(-6L, 7L) // ~14 CPS randomized
             handler.postDelayed(this, delayMs)
@@ -40,7 +43,9 @@ class MacroEngine {
             if (isHoldingRightClick && fastPlaceEnabled) {
                 registerManualRightClick()
                 NativeEngineBridge.sendMouseButton(NativeEngineBridge.MOUSE_RIGHT, true)
-                NativeEngineBridge.sendMouseButton(NativeEngineBridge.MOUSE_RIGHT, false)
+                handler.postDelayed({
+                    NativeEngineBridge.sendMouseButton(NativeEngineBridge.MOUSE_RIGHT, false)
+                }, 26L)
                 rightTickCallback?.invoke()
                 handler.postDelayed(this, 65L)
             }
@@ -100,15 +105,41 @@ class MacroEngine {
         handler.postDelayed({
             registerManualRightClick()
             NativeEngineBridge.sendMouseButton(NativeEngineBridge.MOUSE_RIGHT, true)
-            NativeEngineBridge.sendMouseButton(NativeEngineBridge.MOUSE_RIGHT, false)
+            handler.postDelayed({
+                NativeEngineBridge.sendMouseButton(NativeEngineBridge.MOUSE_RIGHT, false)
+            }, 25L)
         }, 25L)
         handler.postDelayed({
             NativeEngineBridge.tapHotbarSlot(primaryWeaponSlotZeroBased)
             registerManualLeftClick()
             NativeEngineBridge.sendMouseButton(NativeEngineBridge.MOUSE_LEFT, true)
-            NativeEngineBridge.sendMouseButton(NativeEngineBridge.MOUSE_LEFT, false)
-            onComplete?.invoke()
+            handler.postDelayed({
+                NativeEngineBridge.sendMouseButton(NativeEngineBridge.MOUSE_LEFT, false)
+                onComplete?.invoke()
+            }, 25L)
+        }, 70L)
+    }
+
+    fun executeDropStack() {
+        NativeEngineBridge.sendKeyEvent(NativeEngineBridge.KEY_LEFT_CONTROL, true)
+        handler.postDelayed({
+            NativeEngineBridge.sendKeyEvent(NativeEngineBridge.KEY_Q, true)
+        }, 20L)
+        handler.postDelayed({
+            NativeEngineBridge.sendKeyEvent(NativeEngineBridge.KEY_Q, false)
+            NativeEngineBridge.sendKeyEvent(NativeEngineBridge.KEY_LEFT_CONTROL, false)
         }, 65L)
+    }
+
+    fun executeF3Shortcut(subKeyCode: Int) {
+        NativeEngineBridge.sendKeyEvent(NativeEngineBridge.KEY_F3, true)
+        handler.postDelayed({
+            NativeEngineBridge.sendKeyEvent(subKeyCode, true)
+        }, 25L)
+        handler.postDelayed({
+            NativeEngineBridge.sendKeyEvent(subKeyCode, false)
+            NativeEngineBridge.sendKeyEvent(NativeEngineBridge.KEY_F3, false)
+        }, 75L)
     }
 
     companion object {
@@ -153,6 +184,52 @@ class MacroEngine {
             put("END", 269)
             put("PGUP", 266)
             put("PGDN", 267)
+        }
+
+        val KEYBOARD_ALPHA_NUM: LinkedHashMap<String, Int> = linkedMapOf<String, Int>().apply {
+            put("SPACE", 32)
+            put("L-SHIFT", 340)
+            put("L-CTRL", 341)
+            put("L-ALT", 342)
+            put("TAB", 258)
+            put("ESC", 256)
+            put("ENTER", 257)
+            put("BACKSPC", 259)
+            for (c in 'A'..'Z') {
+                put(c.toString(), c.code)
+            }
+            for (n in '0'..'9') {
+                put(n.toString(), n.code)
+            }
+        }
+
+        val KEYBOARD_FN_NAV: LinkedHashMap<String, Int> = linkedMapOf<String, Int>().apply {
+            for (f in 1..12) {
+                put("F$f", 289 + f)
+            }
+            put("UP", 265)
+            put("DOWN", 264)
+            put("LEFT", 263)
+            put("RIGHT", 262)
+            put("CAPS", 280)
+            put("INS", 260)
+            put("DEL", 261)
+            put("HOME", 268)
+            put("END", 269)
+            put("PGUP", 266)
+            put("PGDN", 267)
+            put("R-SHIFT", 344)
+            put("R-CTRL", 345)
+            put("R-ALT", 346)
+            put("SLASH /", 47)
+            put("MINUS -", 45)
+            put("EQUAL =", 61)
+            put("L-BRACK [", 91)
+            put("R-BRACK ]", 93)
+            put("SEMI ;", 59)
+            put("COMMA ,", 44)
+            put("PERIOD .", 46)
+            put("GRAVE `", 96)
         }
     }
 }

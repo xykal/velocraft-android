@@ -56,6 +56,13 @@
       "modrinthSlug": "modernfix",
       "version": "5.17.0+mc1.20.4",
       "purpose": "Dynamic resource loading (cuts boot time in half and prevents OutOfMemory on 4GB/6GB phones)"
+    },
+    {
+      "id": "modmenu",
+      "name": "Mod Menu",
+      "modrinthSlug": "modmenu",
+      "version": "9.2.0",
+      "purpose": "Adds an in-game Mods button and configuration screen to Minecraft 1.20.4 (Fabric)"
     }
   ],
   "defaultOptionsTxt": {

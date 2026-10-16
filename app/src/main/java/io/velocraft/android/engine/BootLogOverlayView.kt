@@ -187,13 +187,14 @@ class BootLogOverlayView(
             titleScreenReached = snap.titleScreenReached
             swapBuffersCount = snap.swapBuffersCount
 
-            // Automatically minimize overlay 1.5s after the first OpenGL Mojang Splash frame renders
+            // Automatically close boot overlay 1.5s after the first OpenGL Mojang Splash frame renders
             if (mojangSplashReached && !autoMinimizedOnSplash && swapBuffersCount > 0) {
                 if (splashReachedTimestampMs == 0L) {
                     splashReachedTimestampMs = System.currentTimeMillis()
                 } else if (System.currentTimeMillis() - splashReachedTimestampMs >= 1500L) {
                     autoMinimizedOnSplash = true
                     isMinimized = true
+                    visibility = GONE
                 }
             }
         }
@@ -207,6 +208,14 @@ class BootLogOverlayView(
         splashReachedTimestampMs = 0L
         removeCallbacks(refreshTick)
         post(refreshTick)
+    }
+
+    fun reopenLogOverlay() {
+        isMinimized = false
+        visibility = VISIBLE
+        removeCallbacks(refreshTick)
+        post(refreshTick)
+        invalidate()
     }
 
     fun stopBootMonitoring() {
@@ -230,6 +239,7 @@ class BootLogOverlayView(
             isJvmExited = true
             jvmExitCode = exitCode
             isMinimized = false
+            visibility = VISIBLE
             bootStageTitle = if (exitCode == 0) {
                 "SESI JVM SELESAI (KODE KELUAR 0)"
             } else {
@@ -253,7 +263,6 @@ class BootLogOverlayView(
         val u = min(w, h)
 
         if (isMinimized) {
-            drawMinimizedTopPill(canvas, w, h, u)
             return
         }
 
@@ -581,7 +590,7 @@ class BootLogOverlayView(
         btnTextPaint.textSize = u * 0.021f
         val textCenterOffset = btnH * 0.58f
         canvas.drawText(
-            "SEMBUNYIKAN LOG (LIHAT LAYAR)",
+            "TUTUP LOG (LIHAT LAYAR GAME)",
             btnMinimizeRect.centerX(),
             btnMinimizeRect.top + textCenterOffset,
             btnTextPaint
@@ -600,55 +609,16 @@ class BootLogOverlayView(
         )
     }
 
-    private fun drawMinimizedTopPill(canvas: Canvas, w: Float, h: Float, u: Float) {
-        val pillW = w * 0.64f
-        val pillH = u * 0.072f
-        val left = (w - pillW) * 0.5f
-        val top = h * 0.016f
-        minimizedPillRect.set(left, top, left + pillW, top + pillH)
-
-        canvas.drawRoundRect(minimizedPillRect, 14f, 14f, panelPaint)
-        canvas.drawRoundRect(minimizedPillRect, 14f, 14f, accentStrokePaint)
-
-        val etaText = when {
-            titleScreenReached -> "MENU MINECRAFT SIAP (100%)"
-            mojangSplashReached -> "SPLASH MOJANG AKTIF ($bootStageProgress%) | Menu: ~${etaMinecraftMenuSec} dtk"
-            else -> "$bootStageTitle ($bootStageProgress%) | Splash: ~${etaMojangSplashSec} dtk"
-        }
-        val statusText = "$etaText  |  [ KETUK UNTUK BUKA LOG ]"
-        drawFittedText(
-            canvas,
-            statusText,
-            minimizedPillRect.left + u * 0.022f,
-            minimizedPillRect.top + pillH * 0.60f,
-            minimizedPillRect.width() - u * 0.044f,
-            subPaint.apply {
-                color = Color.parseColor("#E2E8F0")
-                textSize = u * 0.020f
-            }
-        )
-    }
-
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        if (visibility != VISIBLE) return false
+        if (visibility != VISIBLE || isMinimized) return false
         val x = event.x
         val y = event.y
-
-        if (isMinimized) {
-            if (minimizedPillRect.contains(x, y)) {
-                if (event.actionMasked == MotionEvent.ACTION_UP) {
-                    isMinimized = false
-                    invalidate()
-                }
-                return true
-            }
-            return false
-        }
 
         if (event.actionMasked == MotionEvent.ACTION_UP) {
             when {
                 btnMinimizeRect.contains(x, y) -> {
                     isMinimized = true
+                    visibility = GONE
                     invalidate()
                     return true
                 }
@@ -666,16 +636,26 @@ class BootLogOverlayView(
         return true
     }
 
+    private fun sanitizeLine(raw: String): String {
+        return raw
+            .replace("libpojavexec.so", "libvelocraft_bridge.so", ignoreCase = true)
+            .replace("pojavexec", "velocraft_bridge", ignoreCase = true)
+            .replace("pojavInitOpenGL", "initOpenGLContext", ignoreCase = true)
+            .replace("pojavInit", "initBridge", ignoreCase = true)
+            .replace("Pojav", "VeloCraft", ignoreCase = true)
+    }
+
     private fun readLiveLogTail(maxLines: Int): List<String> {
         return try {
             val f = VeloLogger.latestLogFile
             if (f != null && f.exists()) {
-                f.readLines().filter { it.isNotBlank() }.takeLast(maxLines)
+                f.readLines().filter { it.isNotBlank() }.takeLast(maxLines).map { sanitizeLine(it) }
             } else {
                 VeloLogger.readLatestLogsTail(6000)
                     .lines()
                     .filter { it.isNotBlank() }
                     .takeLast(maxLines)
+                    .map { sanitizeLine(it) }
             }
         } catch (_: Throwable) {
             emptyList()

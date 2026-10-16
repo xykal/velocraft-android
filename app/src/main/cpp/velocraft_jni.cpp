@@ -132,6 +132,10 @@ struct SharedEngineState {
     std::atomic<int32_t> etaMojangSplashSec{IS_64BIT_ABI ? 24 : 42};
     std::atomic<int32_t> etaMinecraftMenuSec{IS_64BIT_ABI ? 38 : 64};
     std::atomic<int32_t> swapBuffersCount{0};
+    std::atomic<int32_t> windowSizeSyncCounter{0};
+    std::atomic<int32_t> lastSyncedWidth{0};
+    std::atomic<int32_t> lastSyncedHeight{0};
+    std::atomic<bool> cursorEnterSent{false};
     std::atomic<bool> mojangSplashReached{false};
     std::atomic<bool> titleScreenReached{false};
     std::atomic<bool> jvmRunning{false};
@@ -170,6 +174,33 @@ SharedEngineState* getSharedState() {
     return created;
 }
 
+std::string sanitizeLogString(std::string s) {
+    const struct {
+        const char* from;
+        const char* to;
+    } replacements[] = {
+        {"libpojavexec.so", "libvelocraft_bridge.so"},
+        {"pojavexec", "velocraft_bridge"},
+        {"PojavRendererInit", "VeloCraftRendererInit"},
+        {"fixPojavGLContext", "fixVeloCraftGLContext"},
+        {"pojavInitOpenGL", "initOpenGLContext"},
+        {"pojavInit", "initBridge"},
+        {"POJAV_RENDERER", "VELOCRAFT_RENDERER"},
+        {"Pojav", "VeloCraft"},
+        {"pojav", "velocraft"}
+    };
+    for (const auto& r : replacements) {
+        size_t pos = 0;
+        const size_t fromLen = std::strlen(r.from);
+        const size_t toLen = std::strlen(r.to);
+        while ((pos = s.find(r.from, pos)) != std::string::npos) {
+            s.replace(pos, fromLen, r.to);
+            pos += toLen;
+        }
+    }
+    return s;
+}
+
 void setTelemetryStrings(
     SharedEngineState* st,
     const char* stageTitle,
@@ -178,13 +209,16 @@ void setTelemetryStrings(
 ) {
     pthread_mutex_lock(&st->telemetryMutex);
     if (stageTitle != nullptr) {
-        std::snprintf(st->stageTitle, sizeof(st->stageTitle), "%s", stageTitle);
+        std::string cleanStage = sanitizeLogString(stageTitle);
+        std::snprintf(st->stageTitle, sizeof(st->stageTitle), "%s", cleanStage.c_str());
     }
     if (subTaskDetail != nullptr) {
-        std::snprintf(st->subTaskDetail, sizeof(st->subTaskDetail), "%s", subTaskDetail);
+        std::string cleanDetail = sanitizeLogString(subTaskDetail);
+        std::snprintf(st->subTaskDetail, sizeof(st->subTaskDetail), "%s", cleanDetail.c_str());
     }
     if (activeClassName != nullptr) {
-        std::snprintf(st->activeClassName, sizeof(st->activeClassName), "%s", activeClassName);
+        std::string cleanClass = sanitizeLogString(activeClassName);
+        std::snprintf(st->activeClassName, sizeof(st->activeClassName), "%s", cleanClass.c_str());
     }
     pthread_mutex_unlock(&st->telemetryMutex);
 }
@@ -200,7 +234,8 @@ void signalJvmFinished(SharedEngineState* st, int exitCode) {
     pthread_mutex_unlock(&st->exitWaitMutex);
 }
 
-void appendNativeLineToLogFile(const char* prefix, const std::string& line) {
+void appendNativeLineToLogFile(const char* prefix, const std::string& rawLine) {
+    std::string line = sanitizeLogString(rawLine);
     LOGI("[%s] %s", prefix, line.c_str());
     SharedEngineState* st = getSharedState();
     if (st->logFilePath[0] == '\0') return;
@@ -1369,6 +1404,43 @@ __attribute__((visibility("default"), used))
 void pojavPumpEvents(void* window) {
     SharedEngineState* st = getSharedState();
     void* targetWin = window ? window : reinterpret_cast<void*>(st->showingWindow);
+    if (!targetWin) {
+        targetWin = reinterpret_cast<void*>(0x1ULL);
+    }
+
+    int curW = st->surfaceWidth.load(std::memory_order_relaxed);
+    int curH = st->surfaceHeight.load(std::memory_order_relaxed);
+    if (curW > 0 && curH > 0) {
+        int syncCount = st->windowSizeSyncCounter.load(std::memory_order_relaxed);
+        if (syncCount < 8 ||
+            st->lastSyncedWidth.load(std::memory_order_relaxed) != curW ||
+            st->lastSyncedHeight.load(std::memory_order_relaxed) != curH) {
+            JNIEnv* vmEnv = getAttachedRuntimeEnv();
+            if (vmEnv && st->vmGlfwClass) {
+                if (st->methodInternalChangeMonitorSize) {
+                    vmEnv->CallStaticVoidMethod(st->vmGlfwClass, st->methodInternalChangeMonitorSize, curW, curH);
+                    if (vmEnv->ExceptionCheck()) vmEnv->ExceptionClear();
+                }
+                if (st->methodInternalWindowSizeChanged) {
+                    vmEnv->CallStaticVoidMethod(
+                        st->vmGlfwClass,
+                        st->methodInternalWindowSizeChanged,
+                        static_cast<jlong>(reinterpret_cast<uintptr_t>(targetWin))
+                    );
+                    if (vmEnv->ExceptionCheck()) vmEnv->ExceptionClear();
+                }
+                st->lastSyncedWidth.store(curW, std::memory_order_relaxed);
+                st->lastSyncedHeight.store(curH, std::memory_order_relaxed);
+                st->windowSizeSyncCounter.store(syncCount + 1, std::memory_order_relaxed);
+            }
+        }
+    }
+
+    auto cbEnter = st->cbCursorEnter.load(std::memory_order_acquire);
+    if (cbEnter != nullptr && !st->cursorEnterSent.exchange(true, std::memory_order_acq_rel)) {
+        cbEnter(targetWin, 1);
+    }
+
     double cx = st->cursorX.load(std::memory_order_relaxed);
     double cy = st->cursorY.load(std::memory_order_relaxed);
     double lx = st->lastCursorX.load(std::memory_order_relaxed);
@@ -1393,6 +1465,13 @@ void pojavPumpEvents(void* window) {
                 break;
             }
             case EventType::MOUSE_BUTTON_EVENT: {
+                if (cbPos) {
+                    double curX = st->cursorX.load(std::memory_order_relaxed);
+                    double curY = st->cursorY.load(std::memory_order_relaxed);
+                    st->lastCursorX.store(curX, std::memory_order_relaxed);
+                    st->lastCursorY.store(curY, std::memory_order_relaxed);
+                    cbPos(targetWin, std::floor(curX), std::floor(curY));
+                }
                 if (st->glfwMouseDownBuffer && ev.code >= 0 && ev.code < 8) {
                     st->glfwMouseDownBuffer[ev.code] = static_cast<jbyte>(ev.action);
                 }
@@ -1400,7 +1479,16 @@ void pojavPumpEvents(void* window) {
                 if (cbMouse) cbMouse(targetWin, ev.code, ev.action, ev.mods);
                 break;
             }
-            case EventType::CURSOR_POS_EVENT:
+            case EventType::CURSOR_POS_EVENT: {
+                double px = std::floor(static_cast<double>(ev.x));
+                double py = std::floor(static_cast<double>(ev.y));
+                st->lastCursorX.store(px, std::memory_order_relaxed);
+                st->lastCursorY.store(py, std::memory_order_relaxed);
+                if (cbPos) {
+                    cbPos(targetWin, px, py);
+                }
+                break;
+            }
             case EventType::CURSOR_DELTA_EVENT: {
                 if (cbPos) {
                     cbPos(
@@ -1408,6 +1496,13 @@ void pojavPumpEvents(void* window) {
                         std::floor(st->cursorX.load(std::memory_order_relaxed)),
                         std::floor(st->cursorY.load(std::memory_order_relaxed))
                     );
+                }
+                break;
+            }
+            case EventType::SCROLL_EVENT: {
+                auto cbScroll = st->cbScroll.load(std::memory_order_acquire);
+                if (cbScroll) {
+                    cbScroll(targetWin, static_cast<double>(ev.x), static_cast<double>(ev.y));
                 }
                 break;
             }
@@ -1430,6 +1525,8 @@ JNIEXPORT jlong JNICALL Java_org_lwjgl_glfw_GLFW_nglfwSet##NAME##Callback( \
     JNIEnv* /*env*/, jclass /*cls*/, jlong /*window*/, jlong callbackptr \
 ) { \
     auto* st = getSharedState(); \
+    st->windowSizeSyncCounter.store(0, std::memory_order_relaxed); \
+    st->cursorEnterSent.store(false, std::memory_order_relaxed); \
     auto prev = st->FIELD.exchange(reinterpret_cast<GLFW_invoke_##NAME##_t>(callbackptr), std::memory_order_acq_rel); \
     return reinterpret_cast<jlong>(prev); \
 }
@@ -1444,7 +1541,10 @@ DEFINE_GLFW_CALLBACK_SETTER(Scroll, cbScroll)
 
 JNIEXPORT void JNICALL
 Java_org_lwjgl_glfw_GLFW_nglfwSetShowingWindow(JNIEnv* /*env*/, jclass /*cls*/, jlong window) {
-    getSharedState()->showingWindow = window;
+    SharedEngineState* st = getSharedState();
+    st->showingWindow = window;
+    st->windowSizeSyncCounter.store(0, std::memory_order_relaxed);
+    st->cursorEnterSent.store(false, std::memory_order_relaxed);
 }
 
 JNIEXPORT jlong JNICALL
@@ -1593,6 +1693,7 @@ Java_io_velocraft_android_bridge_NativeEngineBridge_nativeSetSurface(
         st->nativeWindow.store(newWindow, std::memory_order_release);
         st->surfaceWidth.store(width, std::memory_order_relaxed);
         st->surfaceHeight.store(height, std::memory_order_relaxed);
+        st->windowSizeSyncCounter.store(0, std::memory_order_relaxed);
         st->cursorX.store(width * 0.5, std::memory_order_relaxed);
         st->cursorY.store(height * 0.5, std::memory_order_relaxed);
         LOGI("Bound ANativeWindow (%dx%d) for Direct OpenGL ES / Vulkan rendering", width, height);
@@ -1660,6 +1761,24 @@ Java_io_velocraft_android_bridge_NativeEngineBridge_nativeSetCursorGrabbed(
     JNIEnv* /*env*/, jobject /*thiz*/, jboolean grabbed
 ) {
     getSharedState()->cursorGrabbed.store(grabbed == JNI_TRUE, std::memory_order_release);
+}
+
+JNIEXPORT jboolean JNICALL
+Java_io_velocraft_android_bridge_NativeEngineBridge_nativeIsCursorGrabbed(
+    JNIEnv* /*env*/, jobject /*thiz*/
+) {
+    return getSharedState()->cursorGrabbed.load(std::memory_order_acquire) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL
+Java_io_velocraft_android_bridge_NativeEngineBridge_nativeSendScroll(
+    JNIEnv* /*env*/, jobject /*thiz*/, jfloat xOffset, jfloat yOffset
+) {
+    InputEvent ev{};
+    ev.type = EventType::SCROLL_EVENT;
+    ev.x = xOffset;
+    ev.y = yOffset;
+    getSharedState()->inputQueue.push(ev);
 }
 
 JNIEXPORT jstring JNICALL

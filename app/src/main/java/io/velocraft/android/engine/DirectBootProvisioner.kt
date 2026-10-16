@@ -23,7 +23,7 @@ class DirectBootProvisioner(private val context: Context) {
     val jreDir: File = File(rootEngineDir, "jre21-$activeAbi")
     val nativesDir: File = File(rootEngineDir, "natives-$activeAbi")
     private val readyMarkerFile: File = File(rootEngineDir, ".velocraft_ready_v6_$activeAbi")
-    private val lwjglMarkerFile: File = File(lwjglDir, ".lwjgl_v74_nocheck")
+    private val lwjglMarkerFile: File = File(lwjglDir, ".lwjgl_v77_nocheck")
 
     fun isEngineProvisioned(): Boolean = readyMarkerFile.exists()
 
@@ -158,6 +158,18 @@ class DirectBootProvisioner(private val context: Context) {
             context.assets.open("mods/velocraft-bridge-mod.jar").use { input ->
                 outMod.outputStream().use { output ->
                     input.copyTo(output)
+                }
+            }
+        } catch (_: Exception) {
+        }
+        try {
+            val outModMenu = File(modsDir, "modmenu-9.2.0.jar")
+            val disabledModMenu = File(modsDir, "modmenu-9.2.0.jar.disabled")
+            if (!disabledModMenu.exists() && (!outModMenu.exists() || outModMenu.length() < 500_000L)) {
+                context.assets.open("mods/modmenu-9.2.0.jar").use { input ->
+                    outModMenu.outputStream().use { output ->
+                        input.copyTo(output)
+                    }
                 }
             }
         } catch (_: Exception) {

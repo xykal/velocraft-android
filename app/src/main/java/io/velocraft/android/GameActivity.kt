@@ -76,7 +76,7 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        VeloLogger.section("BOOT", "GameActivity.onCreate() started (v0.7.6-release KnotClassLoader LWJGL Fix & Refined UI)")
+        VeloLogger.section("BOOT", "GameActivity.onCreate() started (v0.7.7-release ModMenu + Cursor/Window Sync + Studio HUD)")
 
         val hw = JvmOptimizer.detectHardware(this)
         val effectiveRenderer = RendererProfileManager.resolveEffectiveBackend(this)
@@ -175,6 +175,9 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 proHudOverlay.activeRendererLabel = eff.id.uppercase()
                 mainMenuView.refreshState()
                 proHudOverlay.postInvalidateOnAnimation()
+            },
+            onReopenBootLogOverlay = {
+                bootLogOverlay.reopenLogOverlay()
             }
         ).apply {
             visibility = View.GONE

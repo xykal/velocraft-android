@@ -81,14 +81,14 @@ object RendererProfileManager {
     private const val KEY_ACTIVE_SHADERPACK = "active_shaderpack"
 
     private val DEFAULT_MOD_CATALOG = listOf(
+        Triple("modmenu", "Mod Menu 9.2.0", "Tombol Menu Daftar Mod & Konfigurasi In-Game Fabric"),
         Triple("sodium", "Sodium 0.5.8", "Engine Render Chunk Modern (+250% FPS)"),
         Triple("lithium", "Lithium 0.12.1", "Optimasi Fisika, AI Mob & Server Tick"),
         Triple("ferrite-core", "FerriteCore 6.0.3", "Penghematan Penggunaan RAM hingga 45%"),
         Triple("immediatelyfast", "ImmediatelyFast 1.2.11", "Optimasi Render GUI, HUD, Entity & Partikel"),
         Triple("entityculling", "EntityCulling 1.6.2", "Lewati Render Entitas di Balik Dinding"),
         Triple("modernfix", "ModernFix 5.17.0", "Percepatan Waktu Muat Dunia & Perbaikan Memori"),
-        Triple("iris", "Iris Shaders 1.7.0", "Pipeline Shader Modern Kompatibel Sodium"),
-        Triple("fabric-api", "Fabric API 0.96.4", "Pustaka Inti Ekosistem Mod Fabric 1.20.4")
+        Triple("iris", "Iris Shaders 1.7.0", "Pipeline Shader Modern Kompatibel Sodium")
     )
 
     fun getSelectedBackend(context: Context): RendererBackend {
@@ -149,7 +149,11 @@ object RendererProfileManager {
             } else {
                 enabledPref
             }
-            val cat = if (slug == "iris") "SHADER" else if (slug == "fabric-api") "CORE" else "FPS BOOST"
+            val cat = when (slug) {
+                "iris" -> "SHADER"
+                "modmenu", "fabric-api" -> "UI & CORE"
+                else -> "FPS BOOST"
+            }
             ModInfo(
                 slug = slug,
                 title = title,

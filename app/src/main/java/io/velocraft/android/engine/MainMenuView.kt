@@ -47,11 +47,21 @@ class MainMenuView @JvmOverloads constructor(
     var onOpenRendererAndKeybindModal: (() -> Unit)? = null
     var onOpenVisualHudEditor: (() -> Unit)? = null
 
+    private fun sanitizeLogLines(rawLines: List<String>): List<String> {
+        return rawLines.map { raw ->
+            raw.replace("libpojavexec.so", "libvelocraft_bridge.so", ignoreCase = true)
+                .replace("pojavexec", "velocraft_bridge", ignoreCase = true)
+                .replace("pojavInitOpenGL", "initOpenGLContext", ignoreCase = true)
+                .replace("pojavInit", "initBridge", ignoreCase = true)
+                .replace("Pojav", "VeloCraft", ignoreCase = true)
+        }
+    }
+
     private var activePage: NavPage = NavPage.HOME
         set(value) {
             field = value
             if (value == NavPage.LOGS) {
-                logLines = VeloLogger.readLatestLogsTail(15000).lines()
+                logLines = sanitizeLogLines(VeloLogger.readLatestLogsTail(15000).lines())
                 logScrollY = 0f
             }
             postInvalidateOnAnimation()
@@ -297,7 +307,7 @@ class MainMenuView @JvmOverloads constructor(
         // Subtle version footer at bottom of sidebar
         drawFittedText(
             canvas,
-            "v0.7.6-release | ${if (android.os.Process.is64Bit()) "ARM64" else "ARM32"}",
+            "v0.7.7-release | ${if (android.os.Process.is64Bit()) "ARM64" else "ARM32"}",
             sbPad,
             h - dp(12f),
             sidebarW - sbPad * 2f,
@@ -428,7 +438,7 @@ class MainMenuView @JvmOverloads constructor(
         val statusItems = listOf(
             Triple("OpenJDK 17 Runtime", readiness.isOpenJdkRuntimeReady, if (readiness.isOpenJdkRuntimeReady) "Siap (${hw.abi})" else "Belum Terpasang"),
             Triple("Client 1.20.4 & Libs", readiness.isClientJarReady, if (readiness.isClientJarReady) "Terverifikasi" else "Perlu Diunduh"),
-            Triple("Mod Optimasi & Iris", readiness.installedModsCount >= 6, "${readiness.installedModsCount}/8 Mod Terpasang"),
+            Triple("ModMenu, Optimasi & Iris", readiness.installedModsCount >= 6, "${readiness.installedModsCount}/9 Mod Terpasang"),
             Triple("Asset Suara & Tekstur", readiness.isAssetIndexReady, if (readiness.isAssetIndexReady) "Index 12.json Siap" else "Belum Lengkap")
         )
 
@@ -1124,10 +1134,10 @@ class MainMenuView @JvmOverloads constructor(
 
     private fun handleLogsTap(x: Float, y: Float) {
         if (logRefreshRect.contains(x, y)) {
-            logLines = VeloLogger.readLatestLogsTail(15000).lines()
+            logLines = sanitizeLogLines(VeloLogger.readLatestLogsTail(15000).lines())
             showBannerMessage("Log diperbarui (${logLines.size} baris).")
         } else if (logCopyRect.contains(x, y)) {
-            val fullText = VeloLogger.readLatestLogsTail(25000)
+            val fullText = sanitizeLogLines(VeloLogger.readLatestLogsTail(25000).lines()).joinToString("\n")
             val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             cm.setPrimaryClip(ClipData.newPlainText("MinecraftLog", fullText))
             showBannerMessage("Isi latest.log berhasil disalin ke Clipboard.")
