@@ -64,13 +64,14 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: Set up Android SDK & NDK r27
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android NDK 27.0.12077973 & CMake 3.22.1
+      - name: Configure Android SDK, NDK 27.0.12077973 & CMake 3.22.1
         run: |
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager --install "ndk;27.0.12077973" "cmake;3.22.1" "platforms;android-34" "build-tools;34.0.0"
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager | head -n 1)
+          fi
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" --install "ndk;27.0.12077973" "cmake;3.22.1" "platforms;android-34" "build-tools;34.0.0"
 
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
