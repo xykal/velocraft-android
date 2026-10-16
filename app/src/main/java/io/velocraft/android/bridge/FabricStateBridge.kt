@@ -61,7 +61,7 @@ class FabricStateBridge(
                     val packet = DatagramPacket(buffer, buffer.size)
                     udpSocket.receive(packet)
                     parsePacket(packet.data, packet.length)?.let { state ->
-                        NativeEngineBridge.nativeSetCursorGrabbed(
+                        NativeEngineBridge.setCursorGrabbed(
                             state.screenMode == ScreenMode.IN_GAME_CROSSHAIR
                         )
                         onStateUpdate(state)

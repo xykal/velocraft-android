@@ -1,18 +1,36 @@
 package io.velocraft.android.bridge
 
 import android.view.Surface
+import io.velocraft.android.util.VeloLogger
 
 /**
- * Kotlin wrapper around VeloCraft's lock-free C++20 JNI bridge (libvelocraft_bridge.so).
- * Provides sub-millisecond input dispatch to LWJGL3/GLFW and direct OpenJDK 21 ARM64 boot.
+ * Bulletproof Kotlin wrapper around VeloCraft's lock-free C++20 JNI bridge (`libvelocraft_bridge.so`).
+ * Logs every native initialization step to `/storage/emulated/0/Android/media/io.velocraft.android/log/`
+ * and guards all JNI calls so native library errors can never crash the UI thread.
  */
 object NativeEngineBridge {
+
+    @Volatile
+    var isNativeLoaded: Boolean = false
+        private set
+
+    interface InteractiveInputListener {
+        fun onKeyAction(keyCode: Int, action: Int)
+        fun onMouseAction(button: Int, action: Int)
+        fun onCameraDelta(deltaX: Float, deltaY: Float)
+    }
+
+    @Volatile
+    var inputListener: InteractiveInputListener? = null
 
     init {
         try {
             System.loadLibrary("velocraft_bridge")
-        } catch (e: UnsatisfiedLinkError) {
-            // Ignored in unit test / preview environments where NDK shared lib isn't loaded
+            isNativeLoaded = true
+            VeloLogger.info("Native library libvelocraft_bridge.so loaded successfully (ABI: ${getArchitectureAbi()}).")
+        } catch (t: Throwable) {
+            isNativeLoaded = false
+            VeloLogger.error("Failed to load libvelocraft_bridge.so", t)
         }
     }
 
@@ -53,8 +71,8 @@ object NativeEngineBridge {
     const val KEY_LEFT_CONTROL = 341 // Sprint
 
     external fun nativeSetSurface(surface: Surface?, width: Int, height: Int)
-    external fun nativeSendKey(glfwKeyCode: Int, action: Int, mods: Int = 0)
-    external fun nativeSendMouseButton(button: Int, action: Int, mods: Int = 0)
+    external fun nativeSendKey(glfwKeyCode: Int, action: Int, mods: Int)
+    external fun nativeSendMouseButton(button: Int, action: Int, mods: Int)
     external fun nativeSendCameraDelta(deltaX: Float, deltaY: Float)
     external fun nativeSendCursorPos(x: Float, y: Float)
     external fun nativeSetCursorGrabbed(grabbed: Boolean)
@@ -62,12 +80,94 @@ object NativeEngineBridge {
     external fun nativeLaunchDirectJvm(jliLibPath: String, jvmArgsArray: Array<String>): Int
     external fun nativeGetArchitectureAbi(): String
 
-    /**
-     * Helper to select a hotbar slot (1-9) with a rapid press+release pulse.
-     */
+    fun setSurface(surface: Surface?, width: Int, height: Int) {
+        if (!isNativeLoaded) return
+        try {
+            nativeSetSurface(surface, width, height)
+        } catch (t: Throwable) {
+            VeloLogger.error("nativeSetSurface error", t)
+        }
+    }
+
+    fun sendKey(glfwKeyCode: Int, action: Int, mods: Int = 0) {
+        inputListener?.onKeyAction(glfwKeyCode, action)
+        if (!isNativeLoaded) return
+        try {
+            nativeSendKey(glfwKeyCode, action, mods)
+        } catch (t: Throwable) {
+            VeloLogger.error("nativeSendKey error", t)
+        }
+    }
+
+    fun sendMouseButton(button: Int, action: Int, mods: Int = 0) {
+        inputListener?.onMouseAction(button, action)
+        if (!isNativeLoaded) return
+        try {
+            nativeSendMouseButton(button, action, mods)
+        } catch (t: Throwable) {
+            VeloLogger.error("nativeSendMouseButton error", t)
+        }
+    }
+
+    fun sendCameraDelta(deltaX: Float, deltaY: Float) {
+        inputListener?.onCameraDelta(deltaX, deltaY)
+        if (!isNativeLoaded) return
+        try {
+            nativeSendCameraDelta(deltaX, deltaY)
+        } catch (t: Throwable) {
+            VeloLogger.error("nativeSendCameraDelta error", t)
+        }
+    }
+
+    fun sendCursorPos(x: Float, y: Float) {
+        if (!isNativeLoaded) return
+        try {
+            nativeSendCursorPos(x, y)
+        } catch (t: Throwable) {
+            VeloLogger.error("nativeSendCursorPos error", t)
+        }
+    }
+
+    fun setCursorGrabbed(grabbed: Boolean) {
+        if (!isNativeLoaded) return
+        try {
+            nativeSetCursorGrabbed(grabbed)
+        } catch (t: Throwable) {
+            VeloLogger.error("nativeSetCursorGrabbed error", t)
+        }
+    }
+
+    fun configureRendererEnv(jreHomePath: String, rendererLibName: String, cacheDirPath: String) {
+        if (!isNativeLoaded) return
+        try {
+            nativeConfigureRendererEnv(jreHomePath, rendererLibName, cacheDirPath)
+        } catch (t: Throwable) {
+            VeloLogger.error("nativeConfigureRendererEnv error", t)
+        }
+    }
+
+    fun launchDirectJvm(jliLibPath: String, jvmArgsArray: Array<String>): Int {
+        if (!isNativeLoaded) return -1
+        return try {
+            nativeLaunchDirectJvm(jliLibPath, jvmArgsArray)
+        } catch (t: Throwable) {
+            VeloLogger.error("nativeLaunchDirectJvm error", t)
+            -2
+        }
+    }
+
+    fun getArchitectureAbi(): String {
+        if (!isNativeLoaded) return "unloaded"
+        return try {
+            nativeGetArchitectureAbi()
+        } catch (_: Throwable) {
+            "unknown"
+        }
+    }
+
     fun tapHotbarSlot(slotIndexZeroBased: Int) {
         val key = KEY_1 + slotIndexZeroBased.coerceIn(0, 8)
-        nativeSendKey(key, GLFW_PRESS, 0)
-        nativeSendKey(key, GLFW_RELEASE, 0)
+        sendKey(key, GLFW_PRESS, 0)
+        sendKey(key, GLFW_RELEASE, 0)
     }
 }

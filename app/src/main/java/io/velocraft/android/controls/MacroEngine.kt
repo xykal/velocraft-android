@@ -24,11 +24,11 @@ class MacroEngine {
     private val fastPlaceRunnable = object : Runnable {
         override fun run() {
             if (isHoldingRightClick && fastPlaceEnabled) {
-                NativeEngineBridge.nativeSendMouseButton(
+                NativeEngineBridge.sendMouseButton(
                     NativeEngineBridge.MOUSE_RIGHT,
                     NativeEngineBridge.GLFW_PRESS
                 )
-                NativeEngineBridge.nativeSendMouseButton(
+                NativeEngineBridge.sendMouseButton(
                     NativeEngineBridge.MOUSE_RIGHT,
                     NativeEngineBridge.GLFW_RELEASE
                 )
@@ -61,11 +61,11 @@ class MacroEngine {
         onHotbarVisualUpdate(utilityMacroSlotZeroBased)
 
         handler.postDelayed({
-            NativeEngineBridge.nativeSendMouseButton(
+            NativeEngineBridge.sendMouseButton(
                 NativeEngineBridge.MOUSE_RIGHT,
                 NativeEngineBridge.GLFW_PRESS
             )
-            NativeEngineBridge.nativeSendMouseButton(
+            NativeEngineBridge.sendMouseButton(
                 NativeEngineBridge.MOUSE_RIGHT,
                 NativeEngineBridge.GLFW_RELEASE
             )

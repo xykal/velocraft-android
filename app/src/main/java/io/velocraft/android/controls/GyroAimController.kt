@@ -59,7 +59,7 @@ class GyroAimController(context: Context) : SensorEventListener {
                 if (filteredYaw != 0f || filteredPitch != 0f) {
                     val deltaX = filteredYaw * sensitivityX * 100f * dtSec
                     val deltaY = filteredPitch * sensitivityY * 100f * dtSec
-                    NativeEngineBridge.nativeSendCameraDelta(deltaX, deltaY)
+                    NativeEngineBridge.sendCameraDelta(deltaX, deltaY)
                 }
             }
         }

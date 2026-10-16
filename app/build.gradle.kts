@@ -11,20 +11,20 @@ android {
 
     defaultConfig {
         applicationId = "io.velocraft.android"
-        minSdk = 24 // Android 7.0+ (Supports older 32-bit armeabi-v7a & modern 64-bit arm64-v8a devices)
+        minSdk = 24 // Android 7.0+ (Supports 32-bit armeabi-v7a & 64-bit arm64-v8a)
         targetSdk = 34
-        versionCode = 3
-        versionName = "0.3.0-alpha"
+        versionCode = 4
+        versionName = "0.4.0-alpha"
 
         externalNativeBuild {
             cmake {
                 cppFlags += listOf("-std=c++20", "-O3", "-ffast-math", "-Wall", "-fno-exceptions")
-                arguments += listOf("-DANDROID_STL=c++_shared")
+                // Use c++_static so libvelocraft_bridge.so has ZERO external STL .so dependency issues
+                arguments += listOf("-DANDROID_STL=c++_static")
             }
         }
     }
 
-    // Generate separate lightweight APKs for arm64-v8a and armeabi-v7a + a Universal APK
     splits {
         abi {
             isEnable = true
@@ -66,7 +66,7 @@ android {
 
     packaging {
         jniLibs {
-            useLegacyPackaging = true // Required so dlopen() can load libjvm.so & liblwjgl.so directly
+            useLegacyPackaging = true
         }
     }
 }

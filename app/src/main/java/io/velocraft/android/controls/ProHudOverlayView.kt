@@ -14,16 +14,10 @@ import io.velocraft.android.bridge.NativeEngineBridge
 import kotlin.math.hypot
 
 /**
- * VeloCraft Pro PvP HUD Overlay View.
+ * Minecraft (Java Porting Edition) Pro PvP HUD Overlay View.
  *
- * Features:
- * - True 10-finger independent multi-touch routing (Claw & Thumb PvP friendly).
- * - Dedicated right-half free-look camera touch zone with adjustable sensitivity & acceleration.
- * - Direct 9-Slot Hotbar at the bottom-center for instant 1-tap weapon/block switching.
- * - Real-time Left/Right CPS (Clicks Per Second) counter + FPS/Ping telemetry pill.
- * - Smart GUI Mode: Automatically switches from Crosshair Mode to Direct Touch Cursor when
- *   `FabricStateBridge` detects an open Inventory, Chest, or Pause Menu inside Minecraft.
- * - In-Game Layout Editor: Drag buttons anywhere on screen and save instantly.
+ * Uses Android-safe ArrayList for CPS tracking (avoiding JDK 21 SequencedCollection NoSuchMethodError
+ * on Android 7–14) and dispatches all input via safe NativeEngineBridge wrappers.
  */
 class ProHudOverlayView(
     context: Context,
@@ -56,12 +50,16 @@ class ProHudOverlayView(
     private var isHoldingAttackButton: Boolean = false
     private var editingButton: HudButtonConfig? = null
 
+    // Android 7-15 safe CPS Counter buffers (no JDK 21 removeFirst/addLast clash)
+    private val leftClickTimestamps = ArrayList<Long>(64)
+    private val rightClickTimestamps = ArrayList<Long>(64)
+
     private val autoClickRunnable = object : Runnable {
         override fun run() {
             if (isHoldingAttackButton && holdAutoClickEnabled && !isEditMode) {
-                leftClickTimestamps.addLast(System.currentTimeMillis())
-                NativeEngineBridge.nativeSendMouseButton(NativeEngineBridge.MOUSE_LEFT, NativeEngineBridge.GLFW_PRESS)
-                NativeEngineBridge.nativeSendMouseButton(NativeEngineBridge.MOUSE_LEFT, NativeEngineBridge.GLFW_RELEASE)
+                leftClickTimestamps.add(System.currentTimeMillis())
+                NativeEngineBridge.sendMouseButton(NativeEngineBridge.MOUSE_LEFT, NativeEngineBridge.GLFW_PRESS)
+                NativeEngineBridge.sendMouseButton(NativeEngineBridge.MOUSE_LEFT, NativeEngineBridge.GLFW_RELEASE)
                 postInvalidateOnAnimation()
                 postDelayed(this, 70L) // ~14.2 CPS PvP rhythm
             }
@@ -74,10 +72,6 @@ class ProHudOverlayView(
         ControlProfileManager.saveLayout(context, buttons)
         postInvalidateOnAnimation()
     }
-
-    // CPS Counter Ring Buffers (timestamps in ms of clicks in the last 1000ms)
-    private val leftClickTimestamps = ArrayDeque<Long>()
-    private val rightClickTimestamps = ArrayDeque<Long>()
 
     // Paints
     private val buttonFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
@@ -119,7 +113,7 @@ class ProHudOverlayView(
         val h = height.toFloat()
         if (w <= 0f || h <= 0f) return
 
-        // 1. Top-Center Pro Telemetry Pill (FPS | CPS | Mode | Gyro)
+        // 1. Top-Center Pro Telemetry Pill
         drawTelemetryPill(canvas, w)
 
         // 2. If in GUI_CURSOR mode (Inventory / Chest open), draw subtle cursor indicator & Esc button
@@ -138,6 +132,7 @@ class ProHudOverlayView(
             crosshairPaint.style = Paint.Style.FILL
             canvas.drawCircle(cx, cy, dpToPx(2.2f), crosshairPaint)
         } else {
+            crosshairPaint.style = Paint.Style.STROKE
             canvas.drawLine(cx - arm, cy, cx + arm, cy, crosshairPaint)
             canvas.drawLine(cx, cy - arm, cx, cy + arm, crosshairPaint)
         }
@@ -166,20 +161,26 @@ class ProHudOverlayView(
 
     private fun drawTelemetryPill(canvas: Canvas, screenW: Float) {
         val now = System.currentTimeMillis()
-        while (leftClickTimestamps.isNotEmpty() && now - leftClickTimestamps.first() > 1000L) {
-            leftClickTimestamps.removeFirst()
+        while (leftClickTimestamps.isNotEmpty() && now - leftClickTimestamps[0] > 1000L) {
+            leftClickTimestamps.removeAt(0)
         }
-        while (rightClickTimestamps.isNotEmpty() && now - rightClickTimestamps.first() > 1000L) {
-            rightClickTimestamps.removeFirst()
+        while (rightClickTimestamps.isNotEmpty() && now - rightClickTimestamps[0] > 1000L) {
+            rightClickTimestamps.removeAt(0)
         }
 
         val leftCps = leftClickTimestamps.size
         val rightCps = rightClickTimestamps.size
-        val modeLabel = if (isEditMode) "HUD EDITOR (DRAG TOMBOL)" else if (currentScreenMode == FabricStateBridge.ScreenMode.GUI_CURSOR) "GUI TOUCH MODE" else "CROSSHAIR LOCK"
+        val modeLabel = if (isEditMode) {
+            "HUD EDITOR (GESER TOMBOL)"
+        } else if (currentScreenMode == FabricStateBridge.ScreenMode.GUI_CURSOR) {
+            "GUI TOUCH MODE"
+        } else {
+            "MINECRAFT PORT"
+        }
         val gyroLabel = if (gyroController.isEnabled) "GYRO: ON" else "GYRO: OFF"
         val banner = "FPS: $clientFps  |  CPS: $leftCps / $rightCps  |  $gyroLabel  |  $modeLabel"
 
-        val pillW = dpToPx(340f)
+        val pillW = dpToPx(350f)
         val pillH = dpToPx(26f)
         val left = (screenW - pillW) * 0.5f
         val top = dpToPx(8f)
@@ -211,7 +212,6 @@ class ProHudOverlayView(
     }
 
     private fun drawGuiModeOverlay(canvas: Canvas, screenW: Float, screenH: Float) {
-        // Draw only a clean "CLOSE GUI (ESC)" button in the top-right when Inventory/Chest is open
         val bx = screenW * 0.90f
         val by = screenH * 0.12f
         val rad = dpToPx(26f)
@@ -228,32 +228,26 @@ class ProHudOverlayView(
         val x = event.getX(actionIndex)
         val y = event.getY(actionIndex)
 
-        // 1. Handle GUI_CURSOR Mode (Direct Touch inside Inventory / Chest / Title Screen)
         if (currentScreenMode == FabricStateBridge.ScreenMode.GUI_CURSOR && !isEditMode) {
-            return handleGuiCursorTouch(event, actionMasked, x, y)
+            return handleGuiCursorTouch(actionMasked, x, y)
         }
 
-        // 2. Handle In-Game Layout Editor Mode (Drag & Drop buttons)
         if (isEditMode) {
-            return handleHudEditorTouch(event, actionMasked, x, y)
+            return handleHudEditorTouch(actionMasked, x, y)
         }
 
-        // 3. Standard In-Game Multi-Touch PvP Routing
         when (actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
-                // Check if user tapped the 9-slot direct hotbar first
                 if (tryHandleHotbarTap(x, y)) {
                     postInvalidateOnAnimation()
                     return true
                 }
 
-                // Check if pointer hit a HUD button
                 val hitBtn = findHitButton(x, y)
                 if (hitBtn != null) {
                     pointerToButtonMap[pointerId] = hitBtn
                     onButtonPress(hitBtn)
                 } else if (lookPointerId == MotionEvent.INVALID_POINTER_ID) {
-                    // Assign this finger to smooth camera look
                     lookPointerId = pointerId
                     lastLookX = x
                     lastLookY = y
@@ -270,7 +264,7 @@ class ProHudOverlayView(
                         val dy = (curY - lastLookY) * touchLookSensitivity
                         lastLookX = curX
                         lastLookY = curY
-                        NativeEngineBridge.nativeSendCameraDelta(dx, dy)
+                        NativeEngineBridge.sendCameraDelta(dx, dy)
                     }
                 }
             }
@@ -291,32 +285,30 @@ class ProHudOverlayView(
     }
 
     private fun handleGuiCursorTouch(
-        event: MotionEvent,
         actionMasked: Int,
         x: Float,
         y: Float
     ): Boolean {
-        // Check ESC button at (0.90w, 0.12h)
         if (actionMasked == MotionEvent.ACTION_DOWN &&
             hypot(x - width * 0.90f, y - height * 0.12f) <= dpToPx(30f)
         ) {
-            NativeEngineBridge.nativeSendKey(NativeEngineBridge.KEY_ESCAPE, NativeEngineBridge.GLFW_PRESS)
-            NativeEngineBridge.nativeSendKey(NativeEngineBridge.KEY_ESCAPE, NativeEngineBridge.GLFW_RELEASE)
+            NativeEngineBridge.sendKey(NativeEngineBridge.KEY_ESCAPE, NativeEngineBridge.GLFW_PRESS)
+            NativeEngineBridge.sendKey(NativeEngineBridge.KEY_ESCAPE, NativeEngineBridge.GLFW_RELEASE)
+            currentScreenMode = FabricStateBridge.ScreenMode.IN_GAME_CROSSHAIR
             return true
         }
 
-        NativeEngineBridge.nativeSendCursorPos(x, y)
+        NativeEngineBridge.sendCursorPos(x, y)
         when (actionMasked) {
             MotionEvent.ACTION_DOWN ->
-                NativeEngineBridge.nativeSendMouseButton(NativeEngineBridge.MOUSE_LEFT, NativeEngineBridge.GLFW_PRESS)
+                NativeEngineBridge.sendMouseButton(NativeEngineBridge.MOUSE_LEFT, NativeEngineBridge.GLFW_PRESS)
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->
-                NativeEngineBridge.nativeSendMouseButton(NativeEngineBridge.MOUSE_LEFT, NativeEngineBridge.GLFW_RELEASE)
+                NativeEngineBridge.sendMouseButton(NativeEngineBridge.MOUSE_LEFT, NativeEngineBridge.GLFW_RELEASE)
         }
         return true
     }
 
     private fun handleHudEditorTouch(
-        event: MotionEvent,
         actionMasked: Int,
         x: Float,
         y: Float
@@ -378,29 +370,29 @@ class ProHudOverlayView(
     private fun onButtonPress(btn: HudButtonConfig) {
         when (btn.actionType) {
             ActionType.KEY_HOLD -> {
-                NativeEngineBridge.nativeSendKey(btn.keyCodeOrButton, NativeEngineBridge.GLFW_PRESS)
+                NativeEngineBridge.sendKey(btn.keyCodeOrButton, NativeEngineBridge.GLFW_PRESS)
             }
             ActionType.KEY_TOGGLE -> {
                 if (activeToggles.contains(btn.id)) {
                     activeToggles.remove(btn.id)
-                    NativeEngineBridge.nativeSendKey(btn.keyCodeOrButton, NativeEngineBridge.GLFW_RELEASE)
+                    NativeEngineBridge.sendKey(btn.keyCodeOrButton, NativeEngineBridge.GLFW_RELEASE)
                 } else {
                     activeToggles.add(btn.id)
-                    NativeEngineBridge.nativeSendKey(btn.keyCodeOrButton, NativeEngineBridge.GLFW_PRESS)
+                    NativeEngineBridge.sendKey(btn.keyCodeOrButton, NativeEngineBridge.GLFW_PRESS)
                 }
             }
             ActionType.MOUSE_LEFT_ATTACK -> {
                 isHoldingAttackButton = true
-                leftClickTimestamps.addLast(System.currentTimeMillis())
-                NativeEngineBridge.nativeSendMouseButton(NativeEngineBridge.MOUSE_LEFT, NativeEngineBridge.GLFW_PRESS)
+                leftClickTimestamps.add(System.currentTimeMillis())
+                NativeEngineBridge.sendMouseButton(NativeEngineBridge.MOUSE_LEFT, NativeEngineBridge.GLFW_PRESS)
                 if (holdAutoClickEnabled) {
                     removeCallbacks(autoClickRunnable)
                     postDelayed(autoClickRunnable, 70L)
                 }
             }
             ActionType.MOUSE_RIGHT_PLACE -> {
-                rightClickTimestamps.addLast(System.currentTimeMillis())
-                NativeEngineBridge.nativeSendMouseButton(NativeEngineBridge.MOUSE_RIGHT, NativeEngineBridge.GLFW_PRESS)
+                rightClickTimestamps.add(System.currentTimeMillis())
+                NativeEngineBridge.sendMouseButton(NativeEngineBridge.MOUSE_RIGHT, NativeEngineBridge.GLFW_PRESS)
                 macroEngine.onRightClickDown()
             }
             ActionType.HOTBAR_SLOT -> {
@@ -419,7 +411,7 @@ class ProHudOverlayView(
                 }
             }
             ActionType.PVP_COMBO_MACRO -> {
-                rightClickTimestamps.addLast(System.currentTimeMillis())
+                rightClickTimestamps.add(System.currentTimeMillis())
                 macroEngine.triggerQuickUtilityMacro { updatedSlot ->
                     activeHotbarSlot = updatedSlot
                     postInvalidateOnAnimation()
@@ -431,16 +423,16 @@ class ProHudOverlayView(
     private fun onButtonRelease(btn: HudButtonConfig) {
         when (btn.actionType) {
             ActionType.KEY_HOLD -> {
-                NativeEngineBridge.nativeSendKey(btn.keyCodeOrButton, NativeEngineBridge.GLFW_RELEASE)
+                NativeEngineBridge.sendKey(btn.keyCodeOrButton, NativeEngineBridge.GLFW_RELEASE)
             }
             ActionType.MOUSE_LEFT_ATTACK -> {
                 isHoldingAttackButton = false
                 removeCallbacks(autoClickRunnable)
-                NativeEngineBridge.nativeSendMouseButton(NativeEngineBridge.MOUSE_LEFT, NativeEngineBridge.GLFW_RELEASE)
+                NativeEngineBridge.sendMouseButton(NativeEngineBridge.MOUSE_LEFT, NativeEngineBridge.GLFW_RELEASE)
             }
             ActionType.MOUSE_RIGHT_PLACE -> {
                 macroEngine.onRightClickUp()
-                NativeEngineBridge.nativeSendMouseButton(NativeEngineBridge.MOUSE_RIGHT, NativeEngineBridge.GLFW_RELEASE)
+                NativeEngineBridge.sendMouseButton(NativeEngineBridge.MOUSE_RIGHT, NativeEngineBridge.GLFW_RELEASE)
             }
             else -> Unit
         }

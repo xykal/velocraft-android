@@ -69,7 +69,7 @@ class FirstBootSplashView(context: Context) : View(context) {
         canvas.drawRoundRect(cardRect, dp(16f), dp(16f), borderPaint)
 
         val cx = w * 0.5f
-        canvas.drawText("⚡ VELOCRAFT DIRECT 1.20.4", cx, top + dp(40f), titlePaint)
+        canvas.drawText("⚡ MINECRAFT — JAVA PORTING 1.20.4", cx, top + dp(40f), titlePaint)
 
         val hwText =
             "ABI: ${hwProfile.abi}  •  SoC: ${hwProfile.socModel}  •  RAM Heap: ${hwProfile.allocatedHeapMb} MB"
