@@ -14,7 +14,7 @@ on:
       release_tag:
         description: "Tag versi untuk Draft Release"
         required: false
-        default: "v0.4.0-alpha"
+        default: "v0.5.0-alpha"
       create_draft_release:
         description: "Buat / Update Draft Release otomatis setelah build selesai"
         required: false
@@ -93,15 +93,15 @@ jobs:
         run: |
           gradle :app:assembleDebug --no-daemon
           mkdir -p dist-apks
-          cp app/build/outputs/apk/debug/app-arm64-v8a-debug.apk dist-apks/Minecraft-Porting-v0.4.0-arm64-v8a.apk
-          cp app/build/outputs/apk/debug/app-armeabi-v7a-debug.apk dist-apks/Minecraft-Porting-v0.4.0-armeabi-v7a.apk
-          cp app/build/outputs/apk/debug/app-universal-debug.apk dist-apks/Minecraft-Porting-v0.4.0-universal.apk
+          cp app/build/outputs/apk/debug/app-arm64-v8a-debug.apk dist-apks/Minecraft-Porting-v0.5.0-arm64-v8a.apk
+          cp app/build/outputs/apk/debug/app-armeabi-v7a-debug.apk dist-apks/Minecraft-Porting-v0.5.0-armeabi-v7a.apk
+          cp app/build/outputs/apk/debug/app-universal-debug.apk dist-apks/Minecraft-Porting-v0.5.0-universal.apk
           ls -lh dist-apks/
 
       - name: Upload Dual-ABI APK Build Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Minecraft-Porting-DualABI-v0.4.0-alpha
+          name: Minecraft-Porting-DualABI-v0.5.0-alpha
           path: |
             dist-apks/*.apk
             fabric-bridge-mod/build/libs/velocraft-bridge-mod-0.1.0.jar
@@ -111,33 +111,38 @@ jobs:
         if: ${{ github.event_name == 'push' || inputs.create_draft_release == true }}
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.release_tag || 'v0.4.0-alpha' }}
-          name: "Minecraft (Java Porting Edition ${{ inputs.release_tag || 'v0.4.0-alpha' }} — arm64-v8a & armeabi-v7a) [DRAFT]"
+          tag_name: ${{ inputs.release_tag || 'v0.5.0-alpha' }}
+          name: "Minecraft (Java Porting Edition ${{ inputs.release_tag || 'v0.5.0-alpha' }} — Clean Matte UI & Resumable Downloader) [DRAFT]"
           draft: true
           prerelease: true
           generate_release_notes: true
           body: |
-            ### ⚡ Minecraft — Java Porting Edition (`v0.4.0-alpha`) [DRAFT]
+            ### 🌿 Minecraft — Java Porting Edition (`v0.5.0-alpha`) [DRAFT]
             > **Catatan:** Release ini berstatus **Draft** (hanya terlihat oleh pemilik repo `xykal` / pemegang token dengan akses *write/admin*).
 
-            #### 🛠️ Perbaikan Utama & Fitur Baru di `v0.4.0-alpha`:
-            - **Nama Aplikasi & Logo Baru:** Nama aplikasi di HP kini **`Minecraft`** dengan edisi internal *Java Porting Edition*, lengkap dengan **Logo Kustom HD** (`mipmap-mdpi` s/d `mipmap-xxxhdpi` + *roundIcon*).
-            - **Perbaikan Crash Saat Buka Aplikasi (Force Close Fix):**
-              1. Memperbaiki urutan pemanggilan `window.insetsController` pada Android 11–15 yang sebelumnya dipanggil sebelum `setContentView()` (penyebab utama `NullPointerException` saat startup).
-              2. Mengganti `ArrayDeque.removeFirst()/addLast()` (yang bentrok dengan bytecode `SequencedCollection` JDK 21 pada Android 7–14) dengan `ArrayList` yang kompatibel di semua versi Android.
-              3. Mengubah linkage NDK menjadi `-DANDROID_STL=c++_static` agar `libvelocraft_bridge.so` mandiri tanpa ketergantungan `.so` eksternal.
-              4. Menambahkan `VoxelWorldView` interaktif 120 FPS sebagai viewport cadangan saat `libjli.so` belum dipasang.
-            - **Sistem Log Otomatis ke `/storage/emulated/0/Android/media/io.velocraft.android/log/`:**
-              - Otomatis menulis **`latest.log`** dan **`crash.log`** di folder `Android/media/io.velocraft.android/log/` (bisa dibuka langsung lewat ZArchiver / File Manager tanpa root, atau dilihat langsung dari tombol **⚙ CFG -> 📄 Lihat Log** di dalam game).
+            #### ✨ Pembaruan Utama di `v0.5.0-alpha`:
+            1. **Desain UI/UX & Logo Baru (100% Tanpa Neon — Clean Matte Studio Aesthetic):**
+               - Mengganti seluruh warna neon dengan palet **Warm Matte Charcoal (`#141413`), Moss Green (`#4E8C57`), Terracotta (`#C87D55`), dan Alabaster (`#F4F1EA`)**.
+               - Logo aplikasi baru bergaya *Matte Tactile Grass Block* yang bersih dan modern.
+            2. **Main Menu Validasi Nyata (Simulasi 3D Dihapus):**
+               - Menghapus simulasi 3D dan menggantinya dengan **Main Menu Console (`MainMenuView.kt`)** yang memeriksa keaslian & kelengkapan file (`client-1.20.4.jar`, ~70 *libraries*, *Fabric Loader*, 7 mod optimasi *Modrinth*, dan *Asset Index*).
+               - Tombol **"MAIN SEKARANG"** hanya terbuka setelah seluruh komponen wajib tervalidasi siap.
+            3. **Pilihan Ukuran Paket Data (~685 MB Lengkap vs ~245 MB Hemat):**
+               - **Paket Lengkap (~685 MB):** Mengunduh seluruh library + mod + seluruh *asset objects* termasuk musik latar & *records*.
+               - **Paket Hemat (~245 MB):** Mengunduh seluruh library + mod + tekstur & efek suara inti (melewati file musik latar `.ogg` berukuran besar agar hemat kuota 440 MB).
+            4. **Foreground Push Notification + Floating Overlay + Auto-Resume (`HTTP Range .part`):**
+               - **`EngineDownloadService.kt`:** Berjalan sebagai *Foreground Service* dengan **Push Notification** aktif (lengkap dengan tombol **Jeda / Lanjutkan**) sehingga unduhan tetap jalan walau pindah aplikasi.
+               - **`FloatingDownloadOverlay.kt`:** Widget kapsul melayang di atas aplikasi lain saat izin *Display over other apps* diaktifkan.
+               - **`ResumableDownloadEngine.kt`:** Mendukung **Resume per-file & per-byte (`HTTP Range: bytes=<existing>-` ke file `.part`)** sehingga jika koneksi putus atau aplikasi tertutup tidak sengaja, unduhan langsung lanjut dari posisi terakhir tanpa mengulang dari 0%.
 
             #### 📦 Pilihan File APK:
-            1. **`Minecraft-Porting-v0.4.0-arm64-v8a.apk`** — Khusus HP **64-bit (`arm64-v8a`)**.
-            2. **`Minecraft-Porting-v0.4.0-armeabi-v7a.apk`** — Khusus HP **32-bit (`armeabi-v7a`)**.
-            3. **`Minecraft-Porting-v0.4.0-universal.apk`** — Versi **Universal** (`arm64-v8a` + `armeabi-v7a`).
+            - **`Minecraft-Porting-v0.5.0-arm64-v8a.apk`** *(Khusus HP 64-bit)*
+            - **`Minecraft-Porting-v0.5.0-armeabi-v7a.apk`** *(Khusus HP 32-bit)*
+            - **`Minecraft-Porting-v0.5.0-universal.apk`** *(Universal)*
           files: |
-            dist-apks/Minecraft-Porting-v0.4.0-arm64-v8a.apk
-            dist-apks/Minecraft-Porting-v0.4.0-armeabi-v7a.apk
-            dist-apks/Minecraft-Porting-v0.4.0-universal.apk
+            dist-apks/Minecraft-Porting-v0.5.0-arm64-v8a.apk
+            dist-apks/Minecraft-Porting-v0.5.0-armeabi-v7a.apk
+            dist-apks/Minecraft-Porting-v0.5.0-universal.apk
             fabric-bridge-mod/build/libs/velocraft-bridge-mod-0.1.0.jar
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

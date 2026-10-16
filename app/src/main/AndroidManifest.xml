@@ -1,11 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Network access for Mojang/Modrinth silent first-boot provisioning & Multiplayer servers -->
+    <!-- Network access for Mojang/Fabric/Modrinth resumable downloads & Multiplayer servers -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS" />
+
+    <!-- Foreground Service + Push Notification + Floating Overlay over other apps -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <!-- Legacy storage permission for Android 7-9 fallback; Android 10-15 uses externalMediaDirs automatically -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
@@ -29,10 +35,6 @@
         android:largeHeap="true"
         android:theme="@style/Theme.VeloCraft.Fullscreen">
 
-        <!--
-            DIRECT-TO-GAME ARCHITECTURE ("Tanpa Launcher"):
-            GameActivity is the main entry point.
-        -->
         <activity
             android:name=".GameActivity"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|keyboard|navigation|uiMode|density"
@@ -45,6 +47,13 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Background Resumable Engine & Asset Downloader (Foreground Push Notification) -->
+        <service
+            android:name=".engine.EngineDownloadService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <!-- Diagnostic Crash Report Viewer Activity (also saves to Android/media/io.velocraft.android/log/) -->
         <activity

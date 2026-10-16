@@ -13,8 +13,8 @@ android {
         applicationId = "io.velocraft.android"
         minSdk = 24 // Android 7.0+ (Supports 32-bit armeabi-v7a & 64-bit arm64-v8a)
         targetSdk = 34
-        versionCode = 5
-        versionName = "0.4.1-alpha"
+        versionCode = 6
+        versionName = "0.5.0-alpha"
 
         externalNativeBuild {
             cmake {

@@ -44,6 +44,7 @@ class ProHudOverlayView(
     var clientPingMs: Int = 0
     var activeHotbarSlot: Int = 0
     var isEditMode: Boolean = false
+    var onExitHudEditor: (() -> Unit)? = null
     var holdAutoClickEnabled: Boolean = false
     var useProCircleCrosshair: Boolean = false
     val macroEngine = MacroEngine()
@@ -73,24 +74,24 @@ class ProHudOverlayView(
         postInvalidateOnAnimation()
     }
 
-    // Paints
+    // Paints (Matte Warm Slate / Non-Neon Palette)
     private val buttonFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val buttonStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        strokeWidth = dpToPx(2f)
+        strokeWidth = dpToPx(1.8f)
     }
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.WHITE
+        color = 0xFFF4F1EA.toInt()
         textAlign = Paint.Align.CENTER
-        textSize = dpToPx(11f)
+        textSize = dpToPx(10.5f)
         isFakeBoldText = true
     }
     private val pillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = 0xCC0F172A.toInt()
+        color = 0xD91E1D1A.toInt()
         style = Paint.Style.FILL
     }
     private val crosshairPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = 0xE6FFFFFF.toInt()
+        color = 0xE6F4F1EA.toInt()
         strokeWidth = dpToPx(1.8f)
     }
     private val hotbarRect = RectF()
@@ -140,19 +141,19 @@ class ProHudOverlayView(
         // 4. Direct 9-Slot Hotbar Touch Bar (Bottom Center)
         drawDirectHotbar(canvas, w, h)
 
-        // 5. All Pro PvP HUD Buttons
+        // 5. All Pro PvP HUD Buttons (Matte Charcoal fill + Warm Earth borders)
         for (btn in buttons) {
             val bx = btn.normX * w
             val by = btn.normY * h
             val rad = dpToPx(btn.radiusDp)
             val isPressedOrActive = activeToggles.contains(btn.id) || pointerToButtonMap.containsValue(btn)
 
-            buttonFillPaint.color = if (isPressedOrActive) btn.accentHex else 0xFF1E293B.toInt()
+            buttonFillPaint.color = if (isPressedOrActive) btn.accentHex else 0xFF1E1D1A.toInt()
             buttonFillPaint.alpha = ((if (isPressedOrActive) 0.92f else btn.opacity) * 255).toInt()
             canvas.drawCircle(bx, by, rad, buttonFillPaint)
 
-            buttonStrokePaint.color = if (isEditMode) 0xFFF97316.toInt() else btn.accentHex
-            buttonStrokePaint.alpha = if (isPressedOrActive) 255 else 180
+            buttonStrokePaint.color = if (isEditMode) 0xFFC87D55.toInt() else btn.accentHex
+            buttonStrokePaint.alpha = if (isPressedOrActive) 255 else 200
             canvas.drawCircle(bx, by, rad, buttonStrokePaint)
 
             canvas.drawText(btn.label, bx, by + (textPaint.textSize * 0.35f), textPaint)
@@ -201,10 +202,10 @@ class ProHudOverlayView(
             hotbarRect.set(sx + 2f, topY, sx + slotSize - 2f, topY + slotSize)
             val isSelected = (slot == activeHotbarSlot)
 
-            buttonFillPaint.color = if (isSelected) 0xCC38BDF8.toInt() else 0x990F172A.toInt()
+            buttonFillPaint.color = if (isSelected) 0xCC4E8C57.toInt() else 0xB31E1D1A.toInt()
             canvas.drawRoundRect(hotbarRect, dpToPx(6f), dpToPx(6f), buttonFillPaint)
 
-            buttonStrokePaint.color = if (isSelected) Color.WHITE else 0x8064748B.toInt()
+            buttonStrokePaint.color = if (isSelected) 0xFFF4F1EA.toInt() else 0x8078736A.toInt()
             canvas.drawRoundRect(hotbarRect, dpToPx(6f), dpToPx(6f), buttonStrokePaint)
 
             canvas.drawText("${slot + 1}", hotbarRect.centerX(), hotbarRect.centerY() + dpToPx(4f), textPaint)
@@ -319,6 +320,7 @@ class ProHudOverlayView(
                 if (hit?.actionType == ActionType.HUD_EDITOR_TOGGLE) {
                     isEditMode = false
                     ControlProfileManager.saveLayout(context, buttons)
+                    onExitHudEditor?.invoke()
                 } else {
                     editingButton = hit
                 }
@@ -404,6 +406,10 @@ class ProHudOverlayView(
             }
             ActionType.HUD_EDITOR_TOGGLE -> {
                 isEditMode = !isEditMode
+                if (!isEditMode) {
+                    ControlProfileManager.saveLayout(context, buttons)
+                    onExitHudEditor?.invoke()
+                }
             }
             ActionType.QUICK_SETTINGS -> {
                 QuickSettingsSheet.show(context, this, gyroController) {
