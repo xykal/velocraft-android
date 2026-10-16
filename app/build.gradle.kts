@@ -13,8 +13,8 @@ android {
         applicationId = "io.velocraft.android"
         minSdk = 26 // Android 8.0+ (Required for OpenJDK 21 ARM64 & AHardwareBuffer / Vulkan)
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0-alpha"
+        versionCode = 2
+        versionName = "0.2.0-alpha"
 
         ndk {
             // Focus exclusively on 64-bit ARM for modern Minecraft Java 21 performance

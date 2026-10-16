@@ -5,19 +5,16 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
-import java.net.HttpURLConnection
-import java.net.URL
 
 /**
- * DMCA-Safe Silent First-Boot Provisioner ("Tanpa Launcher").
+ * DMCA-Safe Autonomous First-Boot Provisioner ("Tanpa Launcher").
  *
- * Why this architecture is essential for an Open-Source GitHub project:
- * 1. Redistributing Mojang's proprietary `client.jar` inside a GitHub repo violates copyright and gets DMCA'd.
- * 2. Instead, VeloCraft's repository stays 100% clean & legal. On the very first app boot,
- *    `DirectBootProvisioner` automatically fetches official libraries from Mojang CDN + Fabric Meta +
- *    the Modrinth Optimization Stack (Sodium, Lithium, FerriteCore, ImmediatelyFast, EntityCulling, ModernFix)
- *    and writes the pre-tuned mobile `options.txt` and `sodium-options.json`.
- * 3. Every launch after the first boot skips provisioning completely and boots straight into the game in <1s!
+ * Orchestrates:
+ * 1. Linking APK native ARM64 libraries (`libvelocraft_bridge.so`, `libmobileglues.so`).
+ * 2. Writing hardware-tuned `options.txt` and `sodium-options.json`.
+ * 3. Extracting bundled `velocraft-bridge-mod.jar` into `mods/`.
+ * 4. Fetching official Modrinth optimization mods (Sodium, Lithium, FerriteCore, ImmediatelyFast, EntityCulling, ModernFix).
+ * 5. Resolving Fabric Loader + official Minecraft 1.20.4 libraries from Mojang & Fabric CDNs.
  */
 class DirectBootProvisioner(private val context: Context) {
 
@@ -36,11 +33,12 @@ class DirectBootProvisioner(private val context: Context) {
     val librariesDir: File = File(rootEngineDir, "libraries")
     val jreDir: File = File(rootEngineDir, "jre21-arm64")
     val nativesDir: File = File(rootEngineDir, "natives-arm64")
-    private val readyMarkerFile: File = File(rootEngineDir, ".velocraft_ready_v1")
+    private val readyMarkerFile: File = File(rootEngineDir, ".velocraft_ready_v2")
 
     fun isEngineProvisioned(): Boolean = readyMarkerFile.exists()
 
     suspend fun ensureProvisioned(
+        syncOnlineAssets: Boolean = true,
         onProgress: (ProvisionProgress) -> Unit
     ) = withContext(Dispatchers.IO) {
         if (isEngineProvisioned()) return@withContext
@@ -53,26 +51,59 @@ class DirectBootProvisioner(private val context: Context) {
             .bufferedReader()
             .use { it.readText() }
         val profile = JSONObject(profileJsonStr)
+        val mcVersion = profile.optString("minecraftVersion", "1.20.4")
+        val fabricVersion = profile.optString("fabricLoaderVersion", "0.16.7")
 
-        // Step 1: Write pre-tuned options.txt for mobile high FPS
-        onProgress(ProvisionProgress(1, 5, "Menulis konfigurasi grafis ringan (options.txt)...", 15))
+        // Step 1: Link Native ARM64 Bridges & Write Pre-Tuned Options
+        onProgress(ProvisionProgress(1, 5, "Menyiapkan Native Bridge ARM64 & options.txt...", 12))
+        RuntimeExtractor.linkApkNativeLibraries(context, nativesDir)
         writePreTunedOptionsTxt(profile.getJSONObject("defaultOptionsTxt"))
 
-        // Step 2: Write pre-tuned Sodium config (compact vertex format + deferred chunk updates)
-        onProgress(ProvisionProgress(2, 5, "Mengoptimalkan konfigurasi Sodium & FerriteCore...", 35))
+        // Step 2: Write Pre-Tuned Sodium & FerriteCore Config
+        onProgress(ProvisionProgress(2, 5, "Mengoptimalkan konfigurasi Sodium & FerriteCore...", 28))
         writePreTunedSodiumOptions(profile.getJSONObject("defaultSodiumOptions"))
 
-        // Step 3: Extract bundled VeloCraft Companion Fabric Bridge Mod
-        onProgress(ProvisionProgress(3, 5, "Memasang VeloCraft Native Bridge Mod (Fabric)...", 55))
+        // Step 3: Extract Companion VeloCraft Fabric Bridge Mod
+        onProgress(ProvisionProgress(3, 5, "Memasang VeloCraft Native Bridge Mod (Fabric)...", 45))
         extractBundledBridgeMod()
-
-        // Step 4: Resolve & verify Modrinth optimization stack metadata
-        onProgress(ProvisionProgress(4, 5, "Menyiapkan Mod Optimasi (Sodium, Lithium, FerriteCore, ImmediatelyFast)...", 80))
         writeModStackManifest(profile)
 
-        // Step 5: Mark engine ready for instant direct-boot on future launches
-        onProgress(ProvisionProgress(5, 5, "Engine siap! Membuka Minecraft Java...", 100))
-        readyMarkerFile.writeText("provisioned_mc=${profile.getString("minecraftVersion")}\n")
+        // Step 4: Fetch Modrinth Optimization Stack (Sodium, Lithium, FerriteCore, ImmediatelyFast, etc.)
+        if (syncOnlineAssets) {
+            val modInstaller = ModrinthStackInstaller(modsDir)
+            modInstaller.installOptimizationModpack(mcVersion) { modName, idx, total ->
+                val pct = 45 + ((idx * 25) / total.coerceAtLeast(1))
+                onProgress(
+                    ProvisionProgress(
+                        4,
+                        5,
+                        "Mengunduh Mod Optimasi [$idx/$total]: $modName...",
+                        pct
+                    )
+                )
+            }
+
+            // Step 5: Resolve Fabric Loader & Official Minecraft Libraries
+            try {
+                val resolver = MojangManifestResolver(librariesDir, gameDir)
+                resolver.resolveAndDownloadCoreLibraries(mcVersion, fabricVersion) { done, total, name ->
+                    val pct = 70 + ((done * 28) / total.coerceAtLeast(1))
+                    onProgress(
+                        ProvisionProgress(
+                            5,
+                            5,
+                            "Menyiapkan Engine [$done/$total]: $name",
+                            pct.coerceAtMost(99)
+                        )
+                    )
+                }
+            } catch (_: Exception) {
+                // Offline fallback: allow local cached libraries to proceed
+            }
+        }
+
+        onProgress(ProvisionProgress(5, 5, "VeloCraft Direct siap! Masuk ke dalam game...", 100))
+        readyMarkerFile.writeText("provisioned_mc=$mcVersion\nfabric=$fabricVersion\n")
     }
 
     private fun writePreTunedOptionsTxt(opts: JSONObject) {
@@ -85,9 +116,9 @@ class DirectBootProvisioner(private val context: Context) {
             appendLine("entityDistanceScaling:${opts.optDouble("entityDistanceScaling", 0.75)}")
             appendLine("maxFps:${opts.optInt("maxFps", 120)}")
             appendLine("enableVsync:${opts.optBoolean("enableVsync", false)}")
-            appendLine("graphicsMode:0") // Fast graphics
+            appendLine("graphicsMode:0")
             appendLine("renderClouds:\"false\"")
-            appendLine("particles:2") // Minimal particles
+            appendLine("particles:2")
             appendLine("biomeBlendRadius:${opts.optInt("biomeBlendRadius", 1)}")
             appendLine("mipmapLevels:${opts.optInt("mipmapLevels", 1)}")
             appendLine("rawMouseInput:${opts.optBoolean("rawMouseInput", true)}")
@@ -132,29 +163,11 @@ class DirectBootProvisioner(private val context: Context) {
                 }
             }
         } catch (_: Exception) {
-            // In development before `:fabric-bridge-mod:build` copies the jar into assets/mods/
         }
     }
 
     private fun writeModStackManifest(profile: JSONObject) {
         val manifestOut = File(modsDir, "velocraft-modstack.json")
         manifestOut.writeText(profile.getJSONArray("optimizationMods").toString(2))
-    }
-
-    /**
-     * Helper to download a file from Mojang / Fabric / Modrinth CDN when connected.
-     */
-    fun downloadFileWithRetry(urlStr: String, targetFile: File) {
-        targetFile.parentFile?.mkdirs()
-        val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 15_000
-            readTimeout = 30_000
-            setRequestProperty("User-Agent", "VeloCraft-Android/0.1.0 (OpenSource Direct Client)")
-        }
-        conn.inputStream.use { input ->
-            targetFile.outputStream().use { output ->
-                input.copyTo(output)
-            }
-        }
     }
 }

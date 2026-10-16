@@ -50,7 +50,29 @@ class ProHudOverlayView(
     var clientPingMs: Int = 0
     var activeHotbarSlot: Int = 0
     var isEditMode: Boolean = false
+    var holdAutoClickEnabled: Boolean = false
+    var useProCircleCrosshair: Boolean = false
+    private var isHoldingAttackButton: Boolean = false
     private var editingButton: HudButtonConfig? = null
+
+    private val autoClickRunnable = object : Runnable {
+        override fun run() {
+            if (isHoldingAttackButton && holdAutoClickEnabled && !isEditMode) {
+                leftClickTimestamps.addLast(System.currentTimeMillis())
+                NativeEngineBridge.nativeSendMouseButton(NativeEngineBridge.MOUSE_LEFT, NativeEngineBridge.GLFW_PRESS)
+                NativeEngineBridge.nativeSendMouseButton(NativeEngineBridge.MOUSE_LEFT, NativeEngineBridge.GLFW_RELEASE)
+                postInvalidateOnAnimation()
+                postDelayed(this, 70L) // ~14.2 CPS PvP rhythm
+            }
+        }
+    }
+
+    fun resetToDefaultLayout() {
+        buttons.clear()
+        buttons.addAll(ControlProfileManager.createDefaultProPvpLayout())
+        ControlProfileManager.saveLayout(context, buttons)
+        postInvalidateOnAnimation()
+    }
 
     // CPS Counter Ring Buffers (timestamps in ms of clicks in the last 1000ms)
     private val leftClickTimestamps = ArrayDeque<Long>()
@@ -109,8 +131,15 @@ class ProHudOverlayView(
         val cx = w * 0.5f
         val cy = h * 0.5f
         val arm = dpToPx(7f)
-        canvas.drawLine(cx - arm, cy, cx + arm, cy, crosshairPaint)
-        canvas.drawLine(cx, cy - arm, cx, cy + arm, crosshairPaint)
+        if (useProCircleCrosshair) {
+            crosshairPaint.style = Paint.Style.STROKE
+            canvas.drawCircle(cx, cy, dpToPx(9f), crosshairPaint)
+            crosshairPaint.style = Paint.Style.FILL
+            canvas.drawCircle(cx, cy, dpToPx(2.2f), crosshairPaint)
+        } else {
+            canvas.drawLine(cx - arm, cy, cx + arm, cy, crosshairPaint)
+            canvas.drawLine(cx, cy - arm, cx, cy + arm, crosshairPaint)
+        }
 
         // 4. Direct 9-Slot Hotbar Touch Bar (Bottom Center)
         drawDirectHotbar(canvas, w, h)
@@ -360,8 +389,13 @@ class ProHudOverlayView(
                 }
             }
             ActionType.MOUSE_LEFT_ATTACK -> {
+                isHoldingAttackButton = true
                 leftClickTimestamps.addLast(System.currentTimeMillis())
                 NativeEngineBridge.nativeSendMouseButton(NativeEngineBridge.MOUSE_LEFT, NativeEngineBridge.GLFW_PRESS)
+                if (holdAutoClickEnabled) {
+                    removeCallbacks(autoClickRunnable)
+                    postDelayed(autoClickRunnable, 70L)
+                }
             }
             ActionType.MOUSE_RIGHT_PLACE -> {
                 rightClickTimestamps.addLast(System.currentTimeMillis())
@@ -377,6 +411,11 @@ class ProHudOverlayView(
             ActionType.HUD_EDITOR_TOGGLE -> {
                 isEditMode = !isEditMode
             }
+            ActionType.QUICK_SETTINGS -> {
+                QuickSettingsSheet.show(context, this, gyroController) {
+                    resetToDefaultLayout()
+                }
+            }
         }
     }
 
@@ -386,6 +425,8 @@ class ProHudOverlayView(
                 NativeEngineBridge.nativeSendKey(btn.keyCodeOrButton, NativeEngineBridge.GLFW_RELEASE)
             }
             ActionType.MOUSE_LEFT_ATTACK -> {
+                isHoldingAttackButton = false
+                removeCallbacks(autoClickRunnable)
                 NativeEngineBridge.nativeSendMouseButton(NativeEngineBridge.MOUSE_LEFT, NativeEngineBridge.GLFW_RELEASE)
             }
             ActionType.MOUSE_RIGHT_PLACE -> {

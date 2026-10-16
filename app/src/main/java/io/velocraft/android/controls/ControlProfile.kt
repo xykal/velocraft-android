@@ -31,7 +31,8 @@ enum class ActionType {
     MOUSE_RIGHT_PLACE,  // Right Click + CPS counter + FastPlace / Bridging hold
     HOTBAR_SLOT,        // Direct 1-9 slot selection
     GYRO_TOGGLE,        // Enables/Disables Gyroscope aiming
-    HUD_EDITOR_TOGGLE   // Opens in-game drag-and-drop button customization mode
+    HUD_EDITOR_TOGGLE,  // Opens in-game drag-and-drop button customization mode
+    QUICK_SETTINGS      // Opens floating in-game Pro PvP Quick Settings drawer
 }
 
 object ControlProfileManager {
@@ -63,6 +64,7 @@ object ControlProfileManager {
         HudButtonConfig("btn_f3", "F3", 0.18f, 0.12f, 18f, 0.70f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_F3),
         HudButtonConfig("btn_chat", "CHAT", 0.34f, 0.12f, 20f, 0.72f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_T),
         HudButtonConfig("btn_gyro", "GYRO", 0.75f, 0.12f, 20f, 0.78f, ActionType.GYRO_TOGGLE, isToggle = true, accentHex = 0xFF06B6D4.toInt()),
+        HudButtonConfig("btn_settings", "⚙ CFG", 0.10f, 0.12f, 20f, 0.78f, ActionType.QUICK_SETTINGS, accentHex = 0xFF38BDF8.toInt()),
         HudButtonConfig("btn_edit_hud", "EDIT HUD", 0.93f, 0.12f, 20f, 0.78f, ActionType.HUD_EDITOR_TOGGLE, isToggle = true, accentHex = 0xFFF97316.toInt())
     )
 

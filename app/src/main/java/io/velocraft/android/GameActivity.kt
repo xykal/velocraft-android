@@ -15,6 +15,7 @@ import io.velocraft.android.bridge.NativeEngineBridge
 import io.velocraft.android.controls.GyroAimController
 import io.velocraft.android.controls.ProHudOverlayView
 import io.velocraft.android.engine.DirectBootProvisioner
+import io.velocraft.android.engine.FirstBootSplashView
 import io.velocraft.android.engine.JvmOptimizer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -36,6 +37,7 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
     private val activityScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private lateinit var gameSurfaceView: SurfaceView
     private lateinit var proHudOverlay: ProHudOverlayView
+    private var firstBootSplash: FirstBootSplashView? = null
     private lateinit var gyroController: GyroAimController
     private lateinit var fabricStateBridge: FabricStateBridge
     private lateinit var provisioner: DirectBootProvisioner
@@ -75,6 +77,19 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
             )
         )
 
+        // Show sleek 1x setup overlay only if engine is not yet provisioned
+        if (!provisioner.isEngineProvisioned()) {
+            firstBootSplash = FirstBootSplashView(this).also { splash ->
+                rootContainer.addView(
+                    splash,
+                    FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                        FrameLayout.LayoutParams.MATCH_PARENT
+                    )
+                )
+            }
+        }
+
         setContentView(rootContainer)
 
         // 3. Start listening for real-time GUI/In-Game state packets from VeloCraft Fabric Mod
@@ -107,8 +122,14 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
     private fun bootEngineDirectly() {
         activityScope.launch {
             // Silent 1x provisioning on first boot; instant pass-through on subsequent boots
-            provisioner.ensureProvisioned { _ ->
-                // Progress can be rendered on splash overlay if first run
+            provisioner.ensureProvisioned { progress ->
+                runOnUiThread {
+                    firstBootSplash?.updateProgress(progress)
+                }
+            }
+            firstBootSplash?.let { splash ->
+                (splash.parent as? FrameLayout)?.removeView(splash)
+                firstBootSplash = null
             }
 
             // Launch Embedded OpenJDK 21 ARM64 on dedicated Native Render Thread
