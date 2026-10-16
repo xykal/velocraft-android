@@ -341,7 +341,9 @@ void onJvmClassLoaded(const std::string& rawClassName) {
     bool isMilestoneClass = false;
 
     if (rawClassName.find("TitleScreen") != std::string::npos ||
-        rawClassName.find("AccessibilityOnboardingScreen") != std::string::npos) {
+        rawClassName.find("AccessibilityOnboardingScreen") != std::string::npos ||
+        rawClassName.find("net.minecraft.class_442") != std::string::npos ||
+        rawClassName.find("net.minecraft.class_8032") != std::string::npos) {
         st->mojangSplashReached.store(true, std::memory_order_relaxed);
         st->titleScreenReached.store(true, std::memory_order_relaxed);
         st->etaMojangSplashSec.store(0, std::memory_order_relaxed);
@@ -352,7 +354,8 @@ void onJvmClassLoaded(const std::string& rawClassName) {
         newDetail = "Menu Utama (TitleScreen) aktif — Seluruh registri, tekstur & audio siap!";
         isMilestoneClass = true;
     } else if (rawClassName.find("LoadingOverlay") != std::string::npos ||
-               rawClassName.find("ReloadInstance") != std::string::npos) {
+               rawClassName.find("ReloadInstance") != std::string::npos ||
+               rawClassName.find("net.minecraft.class_425") != std::string::npos) {
         st->mojangSplashReached.store(true, std::memory_order_relaxed);
         st->etaMojangSplashSec.store(0, std::memory_order_relaxed);
         newStage = std::max(prevStage, 10);
@@ -361,6 +364,9 @@ void onJvmClassLoaded(const std::string& rawClassName) {
         isMilestoneClass = true;
     } else if (prevStage >= 7 && (
                rawClassName.find("com.mojang.blaze3d") != std::string::npos ||
+               rawClassName.find("org.lwjgl.glfw.GLFW") != std::string::npos ||
+               rawClassName.find("org.lwjgl.opengl.GL") != std::string::npos ||
+               rawClassName.find("net.minecraft.class_1041") != std::string::npos ||
                rawClassName.find("net.coderbot.iris") != std::string::npos ||
                rawClassName.find("me.jellysquid.mods.sodium") != std::string::npos)) {
         if (prevStage < 9) {
@@ -368,8 +374,18 @@ void onJvmClassLoaded(const std::string& rawClassName) {
             newStageTitle = "TAHAP 9/10: Membuka Jendela GLFW & Konteks OpenGL ES (GL4ES 1.1.5)...";
             newDetail = "Menginisialisasi pipeline grafis Blaze3D, Sodium & Shader GLSL...";
             isMilestoneClass = true;
+        } else if (rawClassName == "com.mojang.blaze3d.platform.GLX" ||
+                   rawClassName == "com.mojang.blaze3d.platform.GlStateManager" ||
+                   rawClassName == "org.lwjgl.glfw.GLFW" ||
+                   rawClassName == "org.lwjgl.opengl.GL" ||
+                   rawClassName == "org.lwjgl.opengl.GLCapabilities" ||
+                   rawClassName == "net.minecraft.class_1041") {
+            newStageTitle = "TAHAP 9/10: Membuka Jendela GLFW & Konteks OpenGL ES (GL4ES 1.1.5)...";
+            newDetail = "Sub-tahap Grafis: Menyiapkan GLFW Window, Konteks EGL & OpenGL Capabilities...";
+            isMilestoneClass = true;
         }
     } else if (rawClassName.find("net.minecraft.client.Minecraft") != std::string::npos ||
+               rawClassName.find("net.minecraft.class_310") != std::string::npos ||
                rawClassName.find("net.minecraft.client.main.Main") != std::string::npos ||
                rawClassName.find("net.minecraft.client.Options") != std::string::npos) {
         if (prevStage < 8) {
@@ -716,21 +732,54 @@ JNIEnv* getAttachedRuntimeEnv() {
     return env;
 }
 
+void logJavaException(JNIEnv* env, const char* where);
+
 static jlong ndlopen_bugfix(JNIEnv* /*env*/, jclass /*cls*/, jlong filename_ptr, jint jmode) {
     const char* filename = reinterpret_cast<const char*>(filename_ptr);
     if (!filename) return 0;
-    void* handle = dlopen(filename, static_cast<int>(jmode) | RTLD_GLOBAL);
+
+    // Never allow fallback to Android Bionic's /system/lib/libjemalloc.so
+    // (which lacks je_malloc and causes recursive SharedLibraryUtil -> MemoryUtil.<clinit> NPE).
+    if (std::strstr(filename, "jemalloc") != nullptr) {
+        return 0;
+    }
+
     SharedEngineState* st = getSharedState();
-    if (!handle && st->nativesDirPath[0] != '\0' && std::strchr(filename, '/') == nullptr) {
+    void* handle = nullptr;
+
+    // Prefer bundled Android natives inside st->nativesDirPath first for bare filenames!
+    if (st->nativesDirPath[0] != '\0' && std::strchr(filename, '/') == nullptr) {
         std::string fullPath = std::string(st->nativesDirPath) + "/" + filename;
         handle = dlopen(fullPath.c_str(), static_cast<int>(jmode) | RTLD_GLOBAL);
+        if (!handle) {
+            handle = dlopen(fullPath.c_str(), static_cast<int>(jmode));
+        }
+    }
+    if (!handle) {
+        handle = dlopen(filename, static_cast<int>(jmode) | RTLD_GLOBAL);
+    }
+    if (!handle) {
+        handle = dlopen(filename, static_cast<int>(jmode));
+    }
+    if (handle) {
+        appendNativeLineToLogFile(
+            "NDLOPEN",
+            std::string("Pustaka native LWJGL dimuat: ") + filename
+        );
+    } else {
+        const char* err = dlerror();
+        appendNativeLineToLogFile(
+            "NDLOPEN-WARN",
+            std::string("Gagal memuat ") + filename + ": " + (err ? err : "unknown")
+        );
     }
     return reinterpret_cast<jlong>(handle);
 }
 
 /**
- * Registers ONLY `DynamicLinkLoader.ndlopen` right after `JNI_CreateJavaVM`
- * WITHOUT loading `org.lwjgl.glfw.GLFW` prematurely!
+ * Registers `DynamicLinkLoader.ndlopen` right after `JNI_CreateJavaVM`
+ * and pre-initializes `APIUtil`, `MemoryUtil`, and `MemoryUtil$LazyInit` (`StdlibAllocator`)
+ * BEFORE `Bootstrap.wrapStreams()` wraps `System.err`, and WITHOUT loading `org.lwjgl.glfw.GLFW` prematurely!
  */
 void registerLwjglDlopenHookOnly(JNIEnv* vmEnv) {
     if (!vmEnv) return;
@@ -741,7 +790,29 @@ void registerLwjglDlopenHookOnly(JNIEnv* vmEnv) {
         };
         vmEnv->RegisterNatives(dynLoader, m, 1);
     }
-    vmEnv->ExceptionClear();
+    if (vmEnv->ExceptionCheck()) {
+        logJavaException(vmEnv, "DynamicLinkLoader.<clinit>");
+    }
+
+    jclass apiUtilCls = vmEnv->FindClass("org/lwjgl/system/APIUtil");
+    if (!apiUtilCls || vmEnv->ExceptionCheck()) {
+        logJavaException(vmEnv, "APIUtil.<clinit>");
+    }
+
+    jclass memUtilCls = vmEnv->FindClass("org/lwjgl/system/MemoryUtil");
+    if (!memUtilCls || vmEnv->ExceptionCheck()) {
+        logJavaException(vmEnv, "MemoryUtil.<clinit>");
+    }
+
+    jclass memLazyCls = vmEnv->FindClass("org/lwjgl/system/MemoryUtil$LazyInit");
+    if (!memLazyCls || vmEnv->ExceptionCheck()) {
+        logJavaException(vmEnv, "MemoryUtil$LazyInit.<clinit>");
+    } else {
+        appendNativeLineToLogFile(
+            "BOOT",
+            "LWJGL 3 MemoryUtil & StdlibAllocator berhasil diinisialisasi di awal."
+        );
+    }
 }
 
 /**
@@ -789,35 +860,57 @@ void logJavaException(JNIEnv* env, const char* where) {
 
     jclass objCls = env->FindClass("java/lang/Object");
     jmethodID toStr = env->GetMethodID(objCls, "toString", "()Ljava/lang/String;");
-    jstring msgStr = reinterpret_cast<jstring>(env->CallObjectMethod(exc, toStr));
-    if (msgStr) {
-        const char* utf = env->GetStringUTFChars(msgStr, nullptr);
-        appendNativeLineToLogFile("JAVA-ERR", std::string("Exception di ") + where + ": " + (utf ? utf : ""));
-        env->ReleaseStringUTFChars(msgStr, utf);
-        env->DeleteLocalRef(msgStr);
-    }
-
     jclass thrCls = env->FindClass("java/lang/Throwable");
     jmethodID getStack = env->GetMethodID(thrCls, "getStackTrace", "()[Ljava/lang/StackTraceElement;");
-    if (getStack) {
-        auto frames = reinterpret_cast<jobjectArray>(env->CallObjectMethod(exc, getStack));
-        if (frames) {
-            jsize len = std::min<jsize>(env->GetArrayLength(frames), 18);
-            for (jsize i = 0; i < len; ++i) {
-                jobject elem = env->GetObjectArrayElement(frames, i);
-                if (elem) {
-                    jstring fStr = reinterpret_cast<jstring>(env->CallObjectMethod(elem, toStr));
-                    if (fStr) {
-                        const char* fUtf = env->GetStringUTFChars(fStr, nullptr);
-                        appendNativeLineToLogFile("JAVA-STACK", std::string("  at ") + (fUtf ? fUtf : ""));
-                        env->ReleaseStringUTFChars(fStr, fUtf);
-                        env->DeleteLocalRef(fStr);
-                    }
-                    env->DeleteLocalRef(elem);
-                }
-            }
-            env->DeleteLocalRef(frames);
+    jmethodID getCause = env->GetMethodID(thrCls, "getCause", "()Ljava/lang/Throwable;");
+
+    jthrowable current = exc;
+    int depth = 0;
+    while (current != nullptr && depth < 5) {
+        jstring msgStr = reinterpret_cast<jstring>(env->CallObjectMethod(current, toStr));
+        if (msgStr) {
+            const char* utf = env->GetStringUTFChars(msgStr, nullptr);
+            std::string prefix = (depth == 0)
+                ? (std::string("Exception di ") + where + ": ")
+                : (std::string("Caused by [") + std::to_string(depth) + "]: ");
+            appendNativeLineToLogFile("JAVA-ERR", prefix + (utf ? utf : ""));
+            env->ReleaseStringUTFChars(msgStr, utf);
+            env->DeleteLocalRef(msgStr);
         }
+
+        if (getStack) {
+            auto frames = reinterpret_cast<jobjectArray>(env->CallObjectMethod(current, getStack));
+            if (frames) {
+                jsize len = std::min<jsize>(env->GetArrayLength(frames), 18);
+                for (jsize i = 0; i < len; ++i) {
+                    jobject elem = env->GetObjectArrayElement(frames, i);
+                    if (elem) {
+                        jstring fStr = reinterpret_cast<jstring>(env->CallObjectMethod(elem, toStr));
+                        if (fStr) {
+                            const char* fUtf = env->GetStringUTFChars(fStr, nullptr);
+                            appendNativeLineToLogFile("JAVA-STACK", std::string("  at ") + (fUtf ? fUtf : ""));
+                            env->ReleaseStringUTFChars(fStr, fUtf);
+                            env->DeleteLocalRef(fStr);
+                        }
+                        env->DeleteLocalRef(elem);
+                    }
+                }
+                env->DeleteLocalRef(frames);
+            }
+        }
+
+        jthrowable nextCause = getCause
+            ? reinterpret_cast<jthrowable>(env->CallObjectMethod(current, getCause))
+            : nullptr;
+        if (nextCause && env->IsSameObject(current, nextCause)) {
+            env->DeleteLocalRef(nextCause);
+            nextCause = nullptr;
+        }
+        if (current != exc) {
+            env->DeleteLocalRef(current);
+        }
+        current = nextCause;
+        depth++;
     }
     env->ExceptionClear();
     env->DeleteLocalRef(exc);

@@ -39,12 +39,27 @@ class DirectBootProvisioner(private val context: Context) {
 
         RuntimeExtractor.linkApkNativeLibraries(context, nativesDir)
         extractBundledLwjglGlfwJar()
+        cleanupConflictingDesktopLibraries()
         writePreTunedOptionsTxt(profile.getJSONObject("defaultOptionsTxt"), includeFullMusicAssets)
         writePreTunedSodiumOptions(profile.getJSONObject("defaultSodiumOptions"))
         writePreTunedModernFixOptions()
         extractBundledBridgeMod()
         writeModStackManifest(profile)
         RendererProfileManager.syncExternalShaderpacks(gameDir, configDir)
+    }
+
+    private fun cleanupConflictingDesktopLibraries() {
+        try {
+            val desktopLwjglDir = File(librariesDir, "org/lwjgl")
+            if (desktopLwjglDir.exists()) {
+                desktopLwjglDir.deleteRecursively()
+            }
+            val oldLoaderDir = File(librariesDir, "net/fabricmc/fabric-loader/0.16.7")
+            if (oldLoaderDir.exists()) {
+                oldLoaderDir.deleteRecursively()
+            }
+        } catch (_: Exception) {
+        }
     }
 
     fun markEngineProvisioned() {

@@ -264,7 +264,12 @@ object ResumableDownloadEngine {
                 val libObj = libsArray.getJSONObject(i)
                 val artifact = libObj.optJSONObject("downloads")?.optJSONObject("artifact") ?: continue
                 val path = artifact.optString("path", "")
-                if (path.isEmpty() || path.contains("natives-macos") || path.contains("natives-windows")) {
+                if (path.isEmpty() ||
+                    path.startsWith("org/lwjgl/") ||
+                    path.contains("natives-macos") ||
+                    path.contains("natives-windows") ||
+                    path.contains("natives-linux")
+                ) {
                     continue
                 }
                 val dest = File(provisioner.librariesDir, path)

@@ -407,7 +407,8 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 .filter { f ->
                     f.isFile &&
                         f.extension.equals("jar", ignoreCase = true) &&
-                        !f.invariantSeparatorsPath.contains("/org/lwjgl/")
+                        !f.invariantSeparatorsPath.contains("/org/lwjgl/") &&
+                        !f.name.equals("fabric-loader-0.16.7.jar", ignoreCase = true)
                 }
                 .forEach { entries.add(it.canonicalPath) }
         }
