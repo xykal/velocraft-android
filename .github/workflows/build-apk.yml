@@ -85,7 +85,9 @@ jobs:
       - name: Bundle Fabric Bridge Mod into Android APK Assets
         run: |
           mkdir -p app/src/main/assets/mods
-          cp fabric-bridge-mod/build/libs/velocraft-bridge-mod-*.jar app/src/main/assets/mods/velocraft-bridge-mod.jar
+          JAR_FILE=$(find fabric-bridge-mod/build/libs -name "*.jar" | head -n 1)
+          cp "$JAR_FILE" app/src/main/assets/mods/velocraft-bridge-mod.jar
+          cp "$JAR_FILE" fabric-bridge-mod/build/libs/velocraft-bridge-mod-0.1.0.jar || true
 
       - name: Assemble VeloCraft Android APK (arm64-v8a)
         run: |

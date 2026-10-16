@@ -5,6 +5,10 @@ plugins {
 group = "io.velocraft.mod"
 version = "0.1.0"
 
+base {
+    archivesName.set("velocraft-bridge-mod")
+}
+
 java {
     sourceCompatibility = JavaVersion.VERSION_21
     targetCompatibility = JavaVersion.VERSION_21
