@@ -56,7 +56,8 @@ object JvmOptimizer {
             (totalCores / 2).coerceIn(2, 4)
         }
 
-        val rendererLib = if (is64) "libmobileglues.so" else "libgl4es_114.so"
+        val effectiveRenderer = RendererProfileManager.resolveEffectiveBackend(context)
+        val rendererLib = effectiveRenderer.libName
 
         val soc = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             Build.SOC_MODEL

@@ -9,157 +9,145 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import androidx.core.app.NotificationCompat
 import io.velocraft.android.GameActivity
 import io.velocraft.android.util.VeloLogger
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.launch
-import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.Executors
 
 /**
- * Android Foreground Service for downloading Minecraft 1.20.4 Engine, Libraries, Mods & Assets.
+ * Android Foreground Service for downloading OpenJDK 21 Runtime + Minecraft 1.20.4 Engine, Libraries, Mods & Assets.
  *
  * Ensures the download continues running even when the user switches to other apps,
- * locks the screen, or minimizes the app, displaying real-time progress (MB / Total MB, Speed MB/s)
- * and Pause/Resume controls directly in the Android Push Notification bar!
+ * locks the screen, or minimizes the app, displaying real-time progress in the Push Notification
+ * bar and optional Floating Window Overlay (Display Over Other Apps).
+ * Strictly zero emojis.
  */
 class EngineDownloadService : Service() {
 
     companion object {
-        const val CHANNEL_ID = "minecraft_port_download_channel"
-        const val NOTIFICATION_ID = 4201
-
-        const val ACTION_START_OR_RESUME = "io.velocraft.android.action.START_OR_RESUME"
-        const val ACTION_PAUSE           = "io.velocraft.android.action.PAUSE"
-        const val EXTRA_FULL_ASSETS      = "extra_full_assets"
+        private const val CHANNEL_ID = "minecraft_engine_download_channel"
+        private const val NOTIFICATION_ID = 2041
+        private const val EXTRA_SKIP_MUSIC_LITE = "extra_skip_music_lite"
 
         @Volatile
-        var latestSnapshot: ResumableDownloadEngine.DownloadSnapshot? = null
+        var latestState: ResumableDownloadEngine.DownloadProgressState =
+            ResumableDownloadEngine.DownloadProgressState(
+                isRunning = false,
+                percent = 0,
+                phaseTitle = "Siap Mengunduh Engine",
+                detailText = "Ketuk 'UNDUH / LANJUTKAN ENGINE & OPENJDK 21' untuk memulai"
+            )
             private set
 
-        @Volatile
-        var snapshotListener: ((ResumableDownloadEngine.DownloadSnapshot) -> Unit)? = null
+        private val listeners = CopyOnWriteArrayList<(ResumableDownloadEngine.DownloadProgressState) -> Unit>()
 
-        fun startOrResumeDownload(context: Context, includeFullMusicAssets: Boolean) {
-            val intent = Intent(context, EngineDownloadService::class.java).apply {
-                action = ACTION_START_OR_RESUME
-                putExtra(EXTRA_FULL_ASSETS, includeFullMusicAssets)
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
-            }
+        fun addListener(listener: (ResumableDownloadEngine.DownloadProgressState) -> Unit) {
+            listeners.add(listener)
+            listener(latestState)
         }
 
-        fun pauseDownload(context: Context) {
+        fun removeListener(listener: (ResumableDownloadEngine.DownloadProgressState) -> Unit) {
+            listeners.remove(listener)
+        }
+
+        fun startOrResume(context: Context, skipMusicLite: Boolean) {
+            ResumableDownloadEngine.setSkipMusicLiteEnabled(context, skipMusicLite)
             val intent = Intent(context, EngineDownloadService::class.java).apply {
-                action = ACTION_PAUSE
+                putExtra(EXTRA_SKIP_MUSIC_LITE, skipMusicLite)
             }
-            context.startService(intent)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (t: Throwable) {
+                VeloLogger.error("Failed to start EngineDownloadService", t)
+            }
         }
     }
 
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var downloadJob: Job? = null
-    private val pauseFlag = AtomicBoolean(false)
-    private var lastNotificationUpdateMs = 0L
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val worker = Executors.newSingleThreadExecutor()
+    private var floatingOverlay: FloatingDownloadOverlay? = null
+    private var isWorkerActive = false
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        floatingOverlay = FloatingDownloadOverlay(applicationContext)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_PAUSE -> {
-                VeloLogger.info("EngineDownloadService received ACTION_PAUSE.")
-                pauseFlag.set(true)
-                latestSnapshot?.let { snap ->
-                    val pausedSnap = snap.copy(
-                        isRunning = false,
-                        isPaused = true,
-                        speedBytesPerSec = 0L,
-                        currentFileName = "Unduhan dijeda — Tekan Lanjutkan kapan saja"
-                    )
-                    latestSnapshot = pausedSnap
-                    snapshotListener?.invoke(pausedSnap)
-                    updateNotification(pausedSnap)
-                }
-                return START_NOT_STICKY
-            }
+        val skipMusic = intent?.getBooleanExtra(
+            EXTRA_SKIP_MUSIC_LITE,
+            ResumableDownloadEngine.isSkipMusicLiteEnabled(this)
+        ) ?: ResumableDownloadEngine.isSkipMusicLiteEnabled(this)
 
-            ACTION_START_OR_RESUME, null -> {
-                val fullAssets = intent?.getBooleanExtra(EXTRA_FULL_ASSETS, true) ?: true
-                if (downloadJob?.isActive == true) {
-                    return START_STICKY
-                }
-                pauseFlag.set(false)
-                val initialSnap = ResumableDownloadEngine.DownloadSnapshot(
-                    isRunning = true,
-                    isPaused = false,
-                    isCompleted = false,
-                    downloadedBytes = 0L,
-                    totalBytes = 0L,
-                    completedFiles = 0,
-                    totalFiles = 1,
-                    speedBytesPerSec = 0L,
-                    currentFileName = "Menyiapkan antrean unduhan..."
-                )
-                startForegroundSafely(buildNotification(initialSnap))
+        val initialNotif = buildNotification(
+            percent = latestState.percent,
+            title = "Menyiapkan Unduhan Minecraft 1.20.4 + OpenJDK 21...",
+            detail = "Memeriksa berkas yang sudah ada di penyimpanan..."
+        )
+        startForegroundCompat(initialNotif)
+        floatingOverlay?.showOrUpdate(
+            percent = latestState.percent,
+            phaseTitle = "Menyiapkan Unduhan Minecraft 1.20.4",
+            detailText = "Memeriksa berkas yang sudah terunduh..."
+        )
 
-                val provisioner = DirectBootProvisioner(applicationContext)
-                val engine = ResumableDownloadEngine(provisioner)
-
-                downloadJob = serviceScope.launch {
-                    try {
-                        engine.executeResumableDownload(
-                            includeFullMusicAssets = fullAssets,
-                            pauseFlag = pauseFlag
-                        ) { snapshot ->
-                            latestSnapshot = snapshot
-                            snapshotListener?.invoke(snapshot)
-                            val now = System.currentTimeMillis()
-                            if (now - lastNotificationUpdateMs >= 500L || !snapshot.isRunning || snapshot.isCompleted) {
-                                lastNotificationUpdateMs = now
-                                updateNotification(snapshot)
-                            }
-                        }
-                    } catch (t: Throwable) {
-                        VeloLogger.error("EngineDownloadService error", t)
-                        val errSnap = ResumableDownloadEngine.DownloadSnapshot(
-                            isRunning = false,
-                            isPaused = true,
-                            isCompleted = false,
-                            downloadedBytes = latestSnapshot?.downloadedBytes ?: 0L,
-                            totalBytes = latestSnapshot?.totalBytes ?: 0L,
-                            completedFiles = latestSnapshot?.completedFiles ?: 0,
-                            totalFiles = latestSnapshot?.totalFiles ?: 1,
-                            speedBytesPerSec = 0L,
-                            currentFileName = "Koneksi terputus — Tekan Lanjutkan untuk meneruskan",
-                            errorMessage = t.message
-                        )
-                        latestSnapshot = errSnap
-                        snapshotListener?.invoke(errSnap)
-                        updateNotification(errSnap)
-                    } finally {
-                        if (latestSnapshot?.isCompleted == true) {
-                            stopForeground(STOP_FOREGROUND_DETACH)
-                            stopSelf()
-                        }
+        if (!isWorkerActive) {
+            isWorkerActive = true
+            worker.execute {
+                try {
+                    ResumableDownloadEngine.runResumableProvisioning(
+                        context = applicationContext,
+                        skipMusicLite = skipMusic
+                    ) { state ->
+                        publishState(state)
                     }
+                } finally {
+                    isWorkerActive = false
+                    mainHandler.postDelayed({
+                        floatingOverlay?.dismiss()
+                        stopForeground(STOP_FOREGROUND_DETACH)
+                        stopSelf()
+                    }, 1800L)
                 }
             }
         }
+
         return START_STICKY
     }
 
-    private fun startForegroundSafely(notification: Notification) {
+    private fun publishState(state: ResumableDownloadEngine.DownloadProgressState) {
+        latestState = state
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val notif = buildNotification(
+            percent = state.percent,
+            title = state.phaseTitle,
+            detail = state.detailText,
+            ongoing = state.isRunning
+        )
+        nm.notify(NOTIFICATION_ID, notif)
+
+        mainHandler.post {
+            floatingOverlay?.showOrUpdate(
+                percent = state.percent,
+                phaseTitle = state.phaseTitle,
+                detailText = state.detailText
+            )
+            for (l in listeners) {
+                l(state)
+            }
+        }
+    }
+
+    private fun startForegroundCompat(notification: Notification) {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 startForeground(
@@ -175,97 +163,51 @@ class EngineDownloadService : Service() {
         }
     }
 
-    private fun updateNotification(snapshot: ResumableDownloadEngine.DownloadSnapshot) {
-        try {
-            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            nm.notify(NOTIFICATION_ID, buildNotification(snapshot))
-        } catch (_: Throwable) {
-        }
-    }
-
-    private fun buildNotification(snapshot: ResumableDownloadEngine.DownloadSnapshot): Notification {
-        val openAppIntent = Intent(this, GameActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-        }
-        val pendingOpen = PendingIntent.getActivity(
-            this,
-            0,
-            openAppIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val dlMb = snapshot.downloadedBytes / (1024L * 1024L)
-        val totalMb = (snapshot.totalBytes / (1024L * 1024L)).coerceAtLeast(1L)
-        val speedMbps = "%.2f".format(snapshot.speedBytesPerSec / (1024f * 1024f))
-
-        val title = when {
-            snapshot.isCompleted -> "Minecraft 1.20.4 Siap Dimainkan!"
-            snapshot.isPaused -> "Unduhan Dijeda (${snapshot.percent}% • $dlMb / $totalMb MB)"
-            else -> "Mengunduh Minecraft 1.20.4 (${snapshot.percent}% • $speedMbps MB/s)"
-        }
-
-        val subtitle = "$dlMb MB / $totalMb MB (${snapshot.completedFiles}/${snapshot.totalFiles} file) • ${snapshot.currentFileName}"
-
-        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentTitle(title)
-            .setContentText(subtitle)
-            .setContentIntent(pendingOpen)
-            .setOngoing(snapshot.isRunning)
-            .setOnlyAlertOnce(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-
-        if (!snapshot.isCompleted) {
-            builder.setProgress(100, snapshot.percent, snapshot.totalBytes == 0L && snapshot.isRunning)
-
-            if (snapshot.isRunning) {
-                val pauseIntent = Intent(this, EngineDownloadService::class.java).apply {
-                    action = ACTION_PAUSE
-                }
-                val pendingPause = PendingIntent.getService(
-                    this,
-                    1,
-                    pauseIntent,
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-                )
-                builder.addAction(android.R.drawable.ic_media_pause, "Jeda", pendingPause)
-            } else {
-                val resumeIntent = Intent(this, EngineDownloadService::class.java).apply {
-                    action = ACTION_START_OR_RESUME
-                }
-                val pendingResume = PendingIntent.getService(
-                    this,
-                    2,
-                    resumeIntent,
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-                )
-                builder.addAction(android.R.drawable.ic_media_play, "Lanjutkan", pendingResume)
-            }
-        } else {
-            builder.setSmallIcon(android.R.drawable.stat_sys_download_done)
-            builder.setProgress(0, 0, false)
-        }
-
-        return builder.build()
-    }
-
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "Unduhan Data Game Minecraft",
+                "Minecraft Engine & Asset Downloader",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Menampilkan progres unduhan engine & asset Minecraft di latar belakang"
+                description = "Menampilkan progres unduhan data Minecraft Java 1.20.4 + OpenJDK 21 di latar belakang"
                 setShowBadge(false)
             }
-            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             nm.createNotificationChannel(channel)
         }
     }
 
+    private fun buildNotification(
+        percent: Int,
+        title: String,
+        detail: String,
+        ongoing: Boolean = true
+    ): Notification {
+        val openIntent = Intent(this, GameActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val pendingFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        } else {
+            PendingIntent.FLAG_UPDATE_CURRENT
+        }
+        val pendingIntent = PendingIntent.getActivity(this, 0, openIntent, pendingFlags)
+
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setContentTitle("Minecraft 1.20.4 - $title ($percent%)")
+            .setContentText(detail)
+            .setContentIntent(pendingIntent)
+            .setOngoing(ongoing)
+            .setOnlyAlertOnce(true)
+            .setProgress(100, percent.coerceIn(0, 100), false)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
+    }
+
     override fun onDestroy() {
-        serviceScope.cancel()
+        floatingOverlay?.dismiss()
         super.onDestroy()
     }
 

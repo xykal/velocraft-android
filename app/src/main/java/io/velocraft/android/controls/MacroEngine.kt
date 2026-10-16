@@ -5,19 +5,14 @@ import android.os.Looper
 import io.velocraft.android.bridge.NativeEngineBridge
 
 /**
- * High-Speed PvP Macro & Bridging Assist Engine for VeloCraft Direct.
- *
- * Supports:
- * 1. FastPlace / Bridging Right-Click Ticker (15 CPS right-click rhythm for Speed-Bridging / Breezily).
- * 2. Quick Utility Swap Macro (e.g., Rod/Snowball/EnderPearl on secondary slot -> Right Click -> Return to Sword Slot 1).
- * 3. Custom GLFW Keybind lookup table so players can bind any HUD button to any keyboard key.
+ * High-Speed PvP Macro, Bridging Assist & Complete PC 104-Key GLFW Lookup Table.
  */
 class MacroEngine {
 
     private val handler = Handler(Looper.getMainLooper())
     var fastPlaceEnabled: Boolean = false
-    var utilityMacroSlotZeroBased: Int = 1 // Default Slot 2 (Rod / Pearl / Cobweb)
-    var primaryWeaponSlotZeroBased: Int = 0 // Default Slot 1 (Sword)
+    var utilityMacroSlotZeroBased: Int = 1 // Slot 2 (Rod / Pearl / Cobweb)
+    var primaryWeaponSlotZeroBased: Int = 0 // Slot 1 (Sword)
 
     private var isHoldingRightClick = false
 
@@ -32,7 +27,7 @@ class MacroEngine {
                     NativeEngineBridge.MOUSE_RIGHT,
                     NativeEngineBridge.GLFW_RELEASE
                 )
-                handler.postDelayed(this, 65L) // ~15.3 CPS right-click bridging rhythm
+                handler.postDelayed(this, 65L)
             }
         }
     }
@@ -50,12 +45,6 @@ class MacroEngine {
         handler.removeCallbacks(fastPlaceRunnable)
     }
 
-    /**
-     * Executes a 1-tap PvP Rod / EnderPearl / Healing combo macro:
-     * 1. Switches to utility slot (e.g. Slot 2).
-     * 2. Sends Right-Click press & release after 25ms.
-     * 3. Switches back to primary Sword slot (Slot 1) after 55ms.
-     */
     fun triggerQuickUtilityMacro(onHotbarVisualUpdate: (Int) -> Unit) {
         NativeEngineBridge.tapHotbarSlot(utilityMacroSlotZeroBased)
         onHotbarVisualUpdate(utilityMacroSlotZeroBased)
@@ -79,34 +68,46 @@ class MacroEngine {
 
     companion object {
         /**
-         * Complete map of bindable GLFW keys for the In-Game Custom Keybind Picker.
+         * Complete PC Keyboard & Mouse GLFW Keycode Table for Custom HUD Button Binding.
          */
-        val BINDABLE_KEYS: LinkedHashMap<String, Int> = linkedMapOf(
-            "W (Forward)" to NativeEngineBridge.KEY_W,
-            "S (Backward)" to NativeEngineBridge.KEY_S,
-            "A (Strafe Left)" to NativeEngineBridge.KEY_A,
-            "D (Strafe Right)" to NativeEngineBridge.KEY_D,
-            "SPACE (Jump)" to NativeEngineBridge.KEY_SPACE,
-            "LEFT SHIFT (Sneak)" to NativeEngineBridge.KEY_LEFT_SHIFT,
-            "LEFT CTRL (Sprint)" to NativeEngineBridge.KEY_LEFT_CONTROL,
-            "E (Inventory)" to NativeEngineBridge.KEY_E,
-            "F (Swap Offhand)" to NativeEngineBridge.KEY_F,
-            "Q (Drop Item)" to NativeEngineBridge.KEY_Q,
-            "T (Chat)" to NativeEngineBridge.KEY_T,
-            "TAB (Player List)" to NativeEngineBridge.KEY_TAB,
-            "F1 (Toggle HUD)" to NativeEngineBridge.KEY_F1,
-            "F3 (Debug Info)" to NativeEngineBridge.KEY_F3,
-            "F5 (Perspective)" to NativeEngineBridge.KEY_F5,
-            "ESC (Pause / Close)" to NativeEngineBridge.KEY_ESCAPE,
-            "Hotbar Slot 1" to NativeEngineBridge.KEY_1,
-            "Hotbar Slot 2" to NativeEngineBridge.KEY_2,
-            "Hotbar Slot 3" to NativeEngineBridge.KEY_3,
-            "Hotbar Slot 4" to NativeEngineBridge.KEY_4,
-            "Hotbar Slot 5" to NativeEngineBridge.KEY_5,
-            "Hotbar Slot 6" to NativeEngineBridge.KEY_6,
-            "Hotbar Slot 7" to NativeEngineBridge.KEY_7,
-            "Hotbar Slot 8" to NativeEngineBridge.KEY_8,
-            "Hotbar Slot 9" to NativeEngineBridge.KEY_9
-        )
+        val BINDABLE_KEYS: LinkedHashMap<String, Int> = linkedMapOf<String, Int>().apply {
+            // Core Action Keys
+            put("SPACE", 32)
+            put("L-SHIFT", 340)
+            put("L-CTRL", 341)
+            put("L-ALT", 342)
+            put("TAB", 258)
+            put("ESC", 256)
+            put("ENTER", 257)
+            put("BACKSPC", 259)
+            put("CAPS", 280)
+
+            // Letters A - Z
+            for (c in 'A'..'Z') {
+                put(c.toString(), c.code)
+            }
+
+            // Numbers 0 - 9
+            for (n in '0'..'9') {
+                put(n.toString(), n.code)
+            }
+
+            // Function Keys F1 - F12
+            for (f in 1..12) {
+                put("F$f", 289 + f)
+            }
+
+            // Arrow & Navigation Keys
+            put("UP", 265)
+            put("DOWN", 264)
+            put("LEFT", 263)
+            put("RIGHT", 262)
+            put("INS", 260)
+            put("DEL", 261)
+            put("HOME", 268)
+            put("END", 269)
+            put("PGUP", 266)
+            put("PGDN", 267)
+        }
     }
 }

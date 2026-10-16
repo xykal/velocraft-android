@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import android.os.Environment
 import android.os.Process
+import android.os.StatFs
 import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
@@ -14,13 +15,12 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * Persistent File & Crash Logger that writes directly to:
- * `/storage/emulated/0/Android/media/<packageName>/log/`
+ * Structured, human-readable diagnostic logger writing to:
+ *   `/storage/emulated/0/Android/media/io.velocraft.android/log/latest.log`
+ *   `/storage/emulated/0/Android/media/io.velocraft.android/log/crash.log`
+ * Also manages `/storage/emulated/0/Android/media/io.velocraft.android/shaderpacks/`.
  *
- * Why `Android/media/<pkgname>/log/`?
- * On Android 11–15 (Scoped Storage), `Android/data/` is hidden from normal file managers,
- * whereas `Android/media/<pkgname>/log/` (via `context.externalMediaDirs`) requires NO special
- * storage permissions to write AND is 100% visible in ZArchiver, MT Manager, and Files by Google!
+ * Strictly zero emojis for clean monospace log readability.
  */
 object VeloLogger {
 
@@ -28,7 +28,15 @@ object VeloLogger {
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
 
     @Volatile
+    var mediaRootDir: File? = null
+        private set
+
+    @Volatile
     var logDir: File? = null
+        private set
+
+    @Volatile
+    var shaderpacksDir: File? = null
         private set
 
     @Volatile
@@ -42,85 +50,102 @@ object VeloLogger {
     @Suppress("DEPRECATION")
     fun init(context: Context) {
         try {
-            // Primary target requested by user: /storage/emulated/0/Android/media/<pkgname>/log
             val mediaBase = context.externalMediaDirs?.firstOrNull()
                 ?: File(Environment.getExternalStorageDirectory(), "Android/media/${context.packageName}")
 
-            val dir = File(mediaBase, "log")
-            if (!dir.exists()) {
-                dir.mkdirs()
-            }
+            val logsFolder = File(mediaBase, "log")
+            val shadersFolder = File(mediaBase, "shaderpacks")
+            logsFolder.mkdirs()
+            shadersFolder.mkdirs()
 
-            // Fallback to externalFilesDir if externalMediaDirs is unmounted
-            val activeDir = if (dir.exists() && dir.canWrite()) {
-                dir
+            val activeLogDir = if (logsFolder.exists() && logsFolder.canWrite()) {
+                logsFolder
             } else {
                 File(context.getExternalFilesDir(null) ?: context.filesDir, "log").apply { mkdirs() }
             }
 
-            logDir = activeDir
-            latestLogFile = File(activeDir, "latest.log")
-            crashLogFile = File(activeDir, "crash.log")
+            mediaRootDir = mediaBase
+            logDir = activeLogDir
+            shaderpacksDir = shadersFolder
+            latestLogFile = File(activeLogDir, "latest.log")
+            crashLogFile = File(activeLogDir, "crash.log")
 
-            // Write session header to latest.log
+            val freeDiskMb = getAvailableDiskSpaceMb(activeLogDir)
+            val abi = if (Process.is64Bit()) "arm64-v8a (64-bit)" else "armeabi-v7a (32-bit)"
+
             val header = buildString {
-                appendLine("================================================================")
-                appendLine("Minecraft (Java Porting Edition v0.4.0) — Boot Diagnostic Log")
-                appendLine("Time       : ${dateFormat.format(Date())}")
-                appendLine("Package    : ${context.packageName}")
-                appendLine("Log Path   : ${activeDir.absolutePath}")
-                appendLine("Device     : ${Build.MANUFACTURER} ${Build.MODEL} (${Build.DEVICE})")
-                appendLine("Android OS : Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
-                appendLine("Process ABI: ${if (Process.is64Bit()) "arm64-v8a (64-bit)" else "armeabi-v7a (32-bit)"}")
-                appendLine("Supported  : ${Build.SUPPORTED_ABIS.joinToString(", ")}")
-                appendLine("================================================================")
+                appendLine("========================================================================")
+                appendLine("MINECRAFT JAVA PORTING EDITION (v0.6.0) - DIAGNOSTIC LOG")
+                appendLine("========================================================================")
+                appendLine("Timestamp        : ${dateFormat.format(Date())}")
+                appendLine("Package Name     : ${context.packageName}")
+                appendLine("Log Directory    : ${activeLogDir.absolutePath}")
+                appendLine("Shaderpacks Dir  : ${shadersFolder.absolutePath}")
+                appendLine("Internal DataDir : ${context.filesDir.absolutePath}")
+                appendLine("Free Disk Space  : $freeDiskMb MB")
+                appendLine("Device Model     : ${Build.MANUFACTURER} ${Build.MODEL} (Board: ${Build.BOARD})")
+                appendLine("Android Version  : Android ${Build.VERSION.RELEASE} (API Level ${Build.VERSION.SDK_INT})")
+                appendLine("Active Process   : $abi")
+                appendLine("Supported ABIs   : ${Build.SUPPORTED_ABIS.joinToString(", ")}")
+                appendLine("========================================================================")
             }
             latestLogFile?.writeText(header)
-            info("VeloLogger initialized successfully at ${activeDir.absolutePath}")
+            section("BOOT", "Logger initialized. Ready to record engine, renderer, download, and JVM events.")
         } catch (t: Throwable) {
             Log.e(TAG, "Failed to initialize VeloLogger", t)
         }
     }
 
     @Synchronized
+    fun section(category: String, message: String) {
+        val cat = category.uppercase(Locale.US).padEnd(8, ' ')
+        Log.i(TAG, "[$cat] $message")
+        appendLineToFile("INFO ", cat, message)
+    }
+
+    @Synchronized
     fun info(message: String) {
         Log.i(TAG, message)
-        appendLineToFile("INFO", message)
+        appendLineToFile("INFO ", "ENGINE  ", message)
     }
 
     @Synchronized
     fun warn(message: String) {
         Log.w(TAG, message)
-        appendLineToFile("WARN", message)
+        appendLineToFile("WARN ", "ENGINE  ", message)
     }
 
     @Synchronized
     fun error(message: String, throwable: Throwable? = null) {
         Log.e(TAG, message, throwable)
         val fullMsg = if (throwable != null) {
-            "$message\n${stackTraceToString(throwable)}"
+            "$message\nCaused by: ${throwable.javaClass.name}: ${throwable.message}\n${stackTraceToString(throwable)}"
         } else {
             message
         }
-        appendLineToFile("ERROR", fullMsg)
+        appendLineToFile("ERROR", "FAULT   ", fullMsg)
     }
 
     @Synchronized
     fun recordCrash(threadName: String, throwable: Throwable): String {
         val report = buildString {
-            appendLine("================ FATAL CRASH REPORT ================")
-            appendLine("Time       : ${dateFormat.format(Date())}")
-            appendLine("Thread     : $threadName")
-            appendLine("Device     : ${Build.MANUFACTURER} ${Build.MODEL} (API ${Build.VERSION.SDK_INT})")
-            appendLine("ABI        : ${if (Process.is64Bit()) "arm64-v8a" else "armeabi-v7a"}")
-            appendLine("Exception  : ${throwable.javaClass.name}: ${throwable.message}")
-            appendLine("----------------------------------------------------")
+            appendLine("========================================================================")
+            appendLine("FATAL UNCAUGHT EXCEPTION REPORT")
+            appendLine("========================================================================")
+            appendLine("Time        : ${dateFormat.format(Date())}")
+            appendLine("Thread      : $threadName")
+            appendLine("Device      : ${Build.MANUFACTURER} ${Build.MODEL} (Android ${Build.VERSION.RELEASE}, API ${Build.VERSION.SDK_INT})")
+            appendLine("Process ABI : ${if (Process.is64Bit()) "arm64-v8a" else "armeabi-v7a"}")
+            appendLine("Exception   : ${throwable.javaClass.name}")
+            appendLine("Message     : ${throwable.message ?: "(no message)"}")
+            appendLine("------------------------------------------------------------------------")
+            appendLine("STACK TRACE:")
             appendLine(stackTraceToString(throwable))
-            appendLine("====================================================")
+            appendLine("========================================================================")
         }
         Log.e(TAG, report)
         try {
-            appendLineToFile("FATAL", report)
+            appendLineToFile("FATAL", "CRASH   ", report)
             crashLogFile?.let { file ->
                 FileOutputStream(file, true).use { fos ->
                     fos.write((report + "\n").toByteArray(Charsets.UTF_8))
@@ -132,20 +157,29 @@ object VeloLogger {
         return report
     }
 
-    fun readLatestLogsTail(maxChars: Int = 8000): String {
+    fun readLatestLogsTail(maxChars: Int = 12000): String {
         return try {
-            val text = latestLogFile?.readText(Charsets.UTF_8) ?: "Log file belum tersedia."
-            if (text.length <= maxChars) text else text.takeLast(maxChars)
+            val text = latestLogFile?.readText(Charsets.UTF_8) ?: "Log file not yet created."
+            if (text.length <= maxChars) text else "...(truncated)...\n" + text.takeLast(maxChars)
         } catch (t: Throwable) {
-            "Gagal membaca log: ${t.message}"
+            "Failed to read log file: ${t.message}"
         }
     }
 
-    private fun appendLineToFile(level: String, message: String) {
+    private fun getAvailableDiskSpaceMb(path: File): Long {
+        return try {
+            val stat = StatFs(path.absolutePath)
+            (stat.availableBlocksLong * stat.blockSizeLong) / (1024L * 1024L)
+        } catch (_: Throwable) {
+            -1L
+        }
+    }
+
+    private fun appendLineToFile(level: String, category: String, message: String) {
         val file = latestLogFile ?: return
         try {
             val timestamp = dateFormat.format(Date())
-            val line = "[$timestamp] [$level] $message\n"
+            val line = "[$timestamp] [$level] [$category] $message\n"
             FileOutputStream(file, true).use { fos ->
                 fos.write(line.toByteArray(Charsets.UTF_8))
                 fos.flush()

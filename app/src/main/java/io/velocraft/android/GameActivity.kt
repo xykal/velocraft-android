@@ -4,6 +4,8 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
@@ -11,21 +13,23 @@ import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.widget.FrameLayout
-import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import io.velocraft.android.auth.PlayerSessionManager
 import io.velocraft.android.bridge.FabricStateBridge
 import io.velocraft.android.bridge.NativeEngineBridge
+import io.velocraft.android.controls.CustomCanvasModalView
+import io.velocraft.android.controls.GamepadInputRouter
 import io.velocraft.android.controls.GyroAimController
 import io.velocraft.android.controls.ProHudOverlayView
-import io.velocraft.android.controls.QuickSettingsSheet
 import io.velocraft.android.engine.DirectBootProvisioner
 import io.velocraft.android.engine.EngineDownloadService
 import io.velocraft.android.engine.FloatingDownloadOverlay
 import io.velocraft.android.engine.JvmOptimizer
 import io.velocraft.android.engine.MainMenuView
+import io.velocraft.android.engine.RendererProfileManager
+import io.velocraft.android.engine.ResumableDownloadEngine
 import io.velocraft.android.util.VeloLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -36,99 +40,118 @@ import java.io.File
 /**
  * Minecraft (Java Porting Edition) Main Console & Direct Game Activity.
  *
- * Flow:
- * 1. Opens into a clean, non-neon Main Menu (`MainMenuView`) that validates all required files
- *    (Client 1.20.4, Libraries, Fabric Loader, 7 Optimization Mods, Assets, Native Bridge).
- * 2. Downloads run inside `EngineDownloadService` (Foreground Push Notification + HTTP Range `.part`
- *    auto-resume + optional Floating Overlay over other apps).
- * 3. Only when 100% of files are verified does the "MAIN SEKARANG" button unlock to launch the JVM.
+ * 100% Custom Canvas UI (Zero stock Android Toast/AlertDialog/SeekBar/Switch, Zero Emojis):
+ * 1. MainMenuView: Validates OpenJDK 21 Runtime (Opsi A bundled zip), Minecraft 1.20.4 Client JAR,
+ *    Modrinth Optimization + Iris Shaders stack, and Mojang Asset Index 12.json (with Silent-OGG Lite Mode).
+ * 2. ProHudOverlayView: Multi-touch PvP HUD with Toggleable Virtual Mouse Cursor ("CURSOR") & HUD Editor.
+ * 3. CustomCanvasModalView: Multi-Renderer selector (AUTO / GL4ES / MobileGlues / LTW / Zink Vulkan),
+ *    Shader toggle, custom on-canvas username keyboard, full PC keyboard/gamepad binder, and latest.log viewer.
+ * 4. GamepadInputRouter: Full Bluetooth/USB Controller & External Keyboard routing.
  */
 class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
     private val activityScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private lateinit var gameSurfaceView: SurfaceView
-    private lateinit var proHudOverlay: ProHudOverlayView
     private lateinit var mainMenuView: MainMenuView
+    private lateinit var proHudOverlay: ProHudOverlayView
+    private lateinit var customModalView: CustomCanvasModalView
     private lateinit var gyroController: GyroAimController
+    private lateinit var gamepadRouter: GamepadInputRouter
     private lateinit var fabricStateBridge: FabricStateBridge
     private lateinit var provisioner: DirectBootProvisioner
 
     @Volatile
     private var jvmStarted = false
 
+    private val downloadListener: (ResumableDownloadEngine.DownloadProgressState) -> Unit = { state ->
+        mainMenuView.refreshState(state)
+        if (!state.isRunning && state.percent >= 100) {
+            val readiness = ResumableDownloadEngine.inspectEngineReadiness(this)
+            if (readiness.isReadyToLaunch) {
+                tryLaunchJvmWhenReady()
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        VeloLogger.info("GameActivity.onCreate() started (v0.5.0 Clean UI + Resumable Foreground Downloader).")
+        VeloLogger.section("BOOT", "GameActivity.onCreate() started (v0.6.0-alpha All-Renderer + Custom HUD & Cursor)")
 
         val hw = JvmOptimizer.detectHardware(this)
-        VeloLogger.info(
-            "Hardware Detected: ABI=${hw.abi}, 64Bit=${hw.is64Bit}, SoC=${hw.socModel}, " +
-                "TotalRAM=${hw.totalRamMb}MB, AllocatedHeap=${hw.allocatedHeapMb}MB, " +
-                "Cores=${hw.totalCores}, Renderer=${hw.recommendedRendererLib}"
+        val effectiveRenderer = RendererProfileManager.resolveEffectiveBackend(this)
+        VeloLogger.section(
+            "RENDERER",
+            "ABI=${hw.abi}, 64Bit=${hw.is64Bit}, SoC=${hw.socModel}, RAM=${hw.totalRamMb}MB " +
+                "(Heap=${hw.allocatedHeapMb}MB), Selected=${RendererProfileManager.getSelectedBackend(this).id}, " +
+                "EffectiveRenderer=${effectiveRenderer.displayName} (${effectiveRenderer.nativeLibName})"
         )
 
         provisioner = DirectBootProvisioner(this)
         provisioner.prepareDirectoriesAndConfigs()
-        gyroController = GyroAimController(this)
 
         val rootContainer = FrameLayout(this)
 
-        // 1. Hardware SurfaceView bound to ANativeWindow for Native OpenGL ES / Vulkan JVM rendering
+        // 1. Hardware SurfaceView bound to ANativeWindow for OpenGL ES / Vulkan rendering
         gameSurfaceView = SurfaceView(this).apply {
             holder.addCallback(this@GameActivity)
         }
 
-        // 2. Pro PvP Multi-Touch HUD Overlay View (Hidden while in Main Menu unless editing HUD layout)
-        proHudOverlay = ProHudOverlayView(this, gyroController).apply {
-            visibility = View.GONE
-            onExitHudEditor = {
-                visibility = View.GONE
-                mainMenuView.visibility = View.VISIBLE
+        // 2. High-precision 200Hz Gyroscope Aim Controller
+        gyroController = GyroAimController(this)
+
+        // 3. Multi-Touch Pro PvP HUD + Virtual Mouse Cursor Overlay
+        proHudOverlay = ProHudOverlayView(this).apply {
+            activeRendererLabel = effectiveRenderer.id.uppercase()
+            onGyroToggleRequested = { enabled ->
+                gyroController.setEnabled(enabled)
+            }
+            onQuickSettingsRequested = {
+                customModalView.openOnTab(CustomCanvasModalView.Tab.RENDERER_ACCOUNT)
+            }
+            onOpenKeybindEditorRequested = { selectedBtn ->
+                customModalView.openOnTab(CustomCanvasModalView.Tab.KEYBIND_CREATOR, selectedBtn)
             }
         }
 
-        // 3. Modern Clean Main Menu Console (Strictly validates readiness before allowing launch)
-        mainMenuView = MainMenuView(
-            context = this,
-            provisioner = provisioner,
-            onStartOrResumeDownload = { includeFullMusic ->
-                requestPostNotificationPermissionIfNeeded()
-                EngineDownloadService.startOrResumeDownload(this, includeFullMusic)
-            },
-            onPauseDownload = {
-                EngineDownloadService.pauseDownload(this)
-            },
-            onLaunchVerifiedGame = {
-                launchVerifiedMinecraftJvm()
-            },
-            onOpenHudEditor = {
-                mainMenuView.visibility = View.GONE
-                proHudOverlay.isEditMode = true
-                proHudOverlay.visibility = View.VISIBLE
-                Toast.makeText(
-                    this,
-                    "Geser tombol untuk mengatur posisi. Ketuk 'SELESAI / HUD' di kanan atas untuk menyimpan.",
-                    Toast.LENGTH_LONG
-                ).show()
-            },
-            onOpenSettingsAndLogs = {
-                QuickSettingsSheet.show(this, proHudOverlay, gyroController) {
-                    proHudOverlay.resetToDefaultLayout()
-                }
-            },
-            onRequestOverlayAndNotifPermissions = {
-                requestPostNotificationPermissionIfNeeded()
-                if (!FloatingDownloadOverlay.canDrawOverlays(this)) {
-                    FloatingDownloadOverlay.requestOverlayPermission(this)
+        // 4. Physical Gamepad & External Keyboard Router
+        gamepadRouter = GamepadInputRouter(proHudOverlay)
+
+        // 5. Clean Matte Non-Neon Main Menu & Readiness Validator Console
+        mainMenuView = MainMenuView(this).apply {
+            onStartOrResumeDownload = { skipMusicLite ->
+                requestPostNotificationsPermissionIfNeeded()
+                EngineDownloadService.startOrResume(this@GameActivity, skipMusicLite)
+                showBannerMessage("Unduhan berjalan di latar belakang. Cek progres di bar atas.")
+            }
+            onRequestOverlayPermission = {
+                if (!FloatingDownloadOverlay.canDrawOverlays(this@GameActivity)) {
+                    FloatingDownloadOverlay.requestOverlayPermission(this@GameActivity)
                 } else {
-                    Toast.makeText(
-                        this,
-                        "Izin Tampil di Atas Aplikasi Lain & Push Notifikasi sudah aktif!",
-                        Toast.LENGTH_SHORT
-                    ).show()
+                    showBannerMessage("Izin Tampil di Atas Aplikasi Lain sudah aktif.")
                 }
             }
-        )
+            onOpenQuickSettings = {
+                customModalView.openOnTab(CustomCanvasModalView.Tab.RENDERER_ACCOUNT)
+            }
+            onOpenRendererAndKeybindModal = {
+                customModalView.openOnTab(CustomCanvasModalView.Tab.RENDERER_ACCOUNT)
+            }
+        }
+
+        // 6. 100% Custom Canvas Settings, Renderer Picker, Keybind Creator & Log Viewer Modal
+        customModalView = CustomCanvasModalView(
+            context = this,
+            hudView = proHudOverlay,
+            gyroController = gyroController,
+            onCloseModal = {
+                val eff = RendererProfileManager.resolveEffectiveBackend(this)
+                proHudOverlay.activeRendererLabel = eff.id.uppercase()
+                mainMenuView.refreshState()
+                proHudOverlay.postInvalidateOnAnimation()
+            }
+        ).apply {
+            visibility = View.GONE
+        }
 
         rootContainer.addView(
             gameSurfaceView,
@@ -151,39 +174,58 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 FrameLayout.LayoutParams.MATCH_PARENT
             )
         )
+        rootContainer.addView(
+            customModalView,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        )
 
         setContentView(rootContainer)
 
         window.decorView.post {
             enableImmersiveHighRefreshDisplaySafely()
-            requestPostNotificationPermissionIfNeeded()
+            requestPostNotificationsPermissionIfNeeded()
         }
 
-        // Subscribe to Foreground Download Service updates
-        EngineDownloadService.snapshotListener = { snapshot ->
+        fabricStateBridge = FabricStateBridge(activityScope) { state ->
             runOnUiThread {
-                mainMenuView.refreshState(snapshot)
-                FloatingDownloadOverlay.showOrUpdate(this@GameActivity, snapshot)
-            }
-        }
-
-        fabricStateBridge = FabricStateBridge(activityScope) { telemetryState ->
-            runOnUiThread {
-                proHudOverlay.updateTelemetry(telemetryState)
+                val eff = RendererProfileManager.resolveEffectiveBackend(this@GameActivity)
+                proHudOverlay.activeRendererLabel = eff.id.uppercase()
+                proHudOverlay.visibility = if (state.inWorld && mainMenuView.visibility != View.VISIBLE) {
+                    View.VISIBLE
+                } else {
+                    proHudOverlay.visibility
+                }
             }
         }
         fabricStateBridge.startListening()
     }
 
-    private fun requestPostNotificationPermissionIfNeeded() {
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (gamepadRouter.onKeyEvent(event)) {
+            return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
+    override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
+        if (gamepadRouter.onGenericMotionEvent(event)) {
+            return true
+        }
+        return super.dispatchGenericMotionEvent(event)
+    }
+
+    private fun requestPostNotificationsPermissionIfNeeded() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
-                != PackageManager.PERMISSION_GRANTED
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+                PackageManager.PERMISSION_GRANTED
             ) {
                 ActivityCompat.requestPermissions(
                     this,
                     arrayOf(Manifest.permission.POST_NOTIFICATIONS),
-                    1001
+                    2041
                 )
             }
         }
@@ -191,8 +233,14 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
     override fun surfaceCreated(holder: SurfaceHolder) {
         val frame = holder.surfaceFrame
-        VeloLogger.info("SurfaceView surfaceCreated (${frame.width()}x${frame.height()}).")
+        VeloLogger.section("RENDERER", "SurfaceView surfaceCreated (${frame.width()}x${frame.height()}).")
         NativeEngineBridge.setSurface(holder.surface, frame.width(), frame.height())
+
+        val readiness = ResumableDownloadEngine.inspectEngineReadiness(this)
+        mainMenuView.refreshState()
+        if (readiness.isReadyToLaunch) {
+            tryLaunchJvmWhenReady()
+        }
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
@@ -203,30 +251,56 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
         NativeEngineBridge.setSurface(null, 0, 0)
     }
 
-    private fun launchVerifiedMinecraftJvm() {
+    private fun tryLaunchJvmWhenReady() {
         if (jvmStarted) return
-        val jliLib = File(provisioner.jreDir, "lib/libjli.so")
-        if (!jliLib.exists()) {
-            VeloLogger.warn("Launch blocked: OpenJDK runtime (${provisioner.jreDir.name}/lib/libjli.so) belum terpasang.")
-            Toast.makeText(
-                this,
-                "File game & mod sudah siap! Menunggu pemasangan paket OpenJDK Runtime (${provisioner.jreDir.name}). Cek Log untuk detail.",
-                Toast.LENGTH_LONG
-            ).show()
+        val readiness = ResumableDownloadEngine.inspectEngineReadiness(this)
+        if (!readiness.isReadyToLaunch) {
+            VeloLogger.section(
+                "RUNTIME",
+                "Engine not yet ready: OpenJDK=${readiness.isOpenJdkRuntimeReady}, " +
+                    "ClientJar=${readiness.isClientJarReady}, Mods=${readiness.installedModsCount}, " +
+                    "Assets=${readiness.isAssetIndexReady}"
+            )
             return
         }
 
+        val jliPrimary = File(provisioner.jreDir, "lib/libjli.so")
+        val jliAlt = File(provisioner.jreDir, "lib/jli/libjli.so")
+        val jliLib = when {
+            jliPrimary.exists() && jliPrimary.length() > 1024L -> jliPrimary
+            jliAlt.exists() && jliAlt.length() > 1024L -> jliAlt
+            else -> null
+        }
+
+        if (jliLib == null) {
+            VeloLogger.section("RUNTIME", "libjli.so not found inside ${provisioner.jreDir.absolutePath}")
+            mainMenuView.showBannerMessage("Paket OpenJDK 21 belum terpasang. Ketuk tombol UNDUH / LANJUTKAN.")
+            return
+        }
+
+        // Sync any external shaderpacks before launching JVM
+        val syncedShaders = RendererProfileManager.syncExternalShaderpacks(this, provisioner.gameDir)
+        val effectiveRenderer = RendererProfileManager.resolveEffectiveBackend(this)
+
+        VeloLogger.section(
+            "RUNTIME",
+            "All components verified (libjli.so=${jliLib.length()} bytes, Renderer=${effectiveRenderer.displayName}, " +
+                "SyncedShaders=$syncedShaders). Switching to In-Game Surface + HUD."
+        )
+
         jvmStarted = true
-        mainMenuView.visibility = View.GONE
-        proHudOverlay.isEditMode = false
-        proHudOverlay.visibility = View.VISIBLE
+        runOnUiThread {
+            mainMenuView.visibility = View.GONE
+            proHudOverlay.visibility = View.VISIBLE
+            proHudOverlay.activeRendererLabel = effectiveRenderer.id.uppercase()
+            proHudOverlay.postInvalidateOnAnimation()
+        }
 
         Thread({
             try {
-                val hw = JvmOptimizer.detectHardware(this@GameActivity)
                 NativeEngineBridge.configureRendererEnv(
                     jreHomePath = provisioner.jreDir.absolutePath,
-                    rendererLibName = hw.recommendedRendererLib,
+                    rendererLibName = effectiveRenderer.nativeLibName,
                     cacheDirPath = cacheDir.absolutePath
                 )
 
@@ -242,9 +316,12 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
                     accessToken = session.accessToken
                 )
 
-                VeloLogger.info("Booting KnotClient with ${jvmArgs.size} JVM args for '${session.username}'...")
+                VeloLogger.section(
+                    "RUNTIME",
+                    "Booting KnotClient for '${session.username}' with ${jvmArgs.size} JVM args and renderer ${effectiveRenderer.id}"
+                )
                 val exitCode = NativeEngineBridge.launchDirectJvm(jliLib.absolutePath, jvmArgs)
-                VeloLogger.info("JVM exited with code: $exitCode")
+                VeloLogger.section("RUNTIME", "JVM exited with code: $exitCode")
             } catch (t: Throwable) {
                 VeloLogger.error("Error in VeloCraft-JVM-Main thread", t)
             }
@@ -272,6 +349,7 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
                     params.preferredDisplayModeId = highestMode.modeId
                     window.attributes = params
                 }
+
                 window.insetsController?.let { controller ->
                     controller.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
                     controller.systemBarsBehavior =
@@ -295,19 +373,19 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
     override fun onResume() {
         super.onResume()
+        EngineDownloadService.addListener(downloadListener)
         mainMenuView.refreshState()
         gyroController.start()
     }
 
     override fun onPause() {
+        EngineDownloadService.removeListener(downloadListener)
         gyroController.stop()
         super.onPause()
     }
 
     override fun onDestroy() {
-        if (EngineDownloadService.snapshotListener != null) {
-            EngineDownloadService.snapshotListener = null
-        }
+        EngineDownloadService.removeListener(downloadListener)
         fabricStateBridge.stopListening()
         gyroController.stop()
         activityScope.cancel()

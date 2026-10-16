@@ -5,8 +5,8 @@ import org.json.JSONObject
 import java.io.File
 
 /**
- * Manages the local directory structure and pre-tuned configuration files (`options.txt` &
- * `sodium-options.json`) for Minecraft 1.20.4 (Fabric).
+ * Manages the local directory structure, pre-tuned configuration files (`options.txt` &
+ * `sodium-options.json`), and external shaderpack synchronization for Minecraft 1.20.4 (Fabric).
  */
 class DirectBootProvisioner(private val context: Context) {
 
@@ -19,11 +19,11 @@ class DirectBootProvisioner(private val context: Context) {
     val librariesDir: File = File(rootEngineDir, "libraries")
     val jreDir: File = File(rootEngineDir, "jre21-$activeAbi")
     val nativesDir: File = File(rootEngineDir, "natives-$activeAbi")
-    private val readyMarkerFile: File = File(rootEngineDir, ".velocraft_ready_v5_$activeAbi")
+    private val readyMarkerFile: File = File(rootEngineDir, ".velocraft_ready_v6_$activeAbi")
 
     fun isEngineProvisioned(): Boolean = readyMarkerFile.exists()
 
-    fun prepareDirectoriesAndConfigs() {
+    fun prepareDirectoriesAndConfigs(includeFullMusicAssets: Boolean = true) {
         listOf(gameDir, modsDir, configDir, assetsDir, librariesDir, jreDir, nativesDir).forEach {
             it.mkdirs()
         }
@@ -34,20 +34,21 @@ class DirectBootProvisioner(private val context: Context) {
         val profile = JSONObject(profileJsonStr)
 
         RuntimeExtractor.linkApkNativeLibraries(context, nativesDir)
-        writePreTunedOptionsTxt(profile.getJSONObject("defaultOptionsTxt"))
+        writePreTunedOptionsTxt(profile.getJSONObject("defaultOptionsTxt"), includeFullMusicAssets)
         writePreTunedSodiumOptions(profile.getJSONObject("defaultSodiumOptions"))
         extractBundledBridgeMod()
         writeModStackManifest(profile)
+        RendererProfileManager.syncExternalShaderpacks(gameDir, configDir)
     }
 
     fun markEngineProvisioned() {
         readyMarkerFile.writeText("provisioned_mc=1.20.4\nabi=$activeAbi\n")
     }
 
-    private fun writePreTunedOptionsTxt(opts: JSONObject) {
+    private fun writePreTunedOptionsTxt(opts: JSONObject, includeFullMusicAssets: Boolean) {
         val optionsFile = File(gameDir, "options.txt")
-        if (optionsFile.exists()) return
         val hw = JvmOptimizer.detectHardware(context)
+        val musicVolume = if (includeFullMusicAssets) "1.0" else "0.0"
         val lines = buildString {
             appendLine("version:3700")
             appendLine("renderDistance:${opts.optInt("renderDistance", 6)}")
@@ -63,7 +64,9 @@ class DirectBootProvisioner(private val context: Context) {
             appendLine("rawMouseInput:${opts.optBoolean("rawMouseInput", true)}")
             appendLine("autoJump:${opts.optBoolean("autoJump", false)}")
             appendLine("guiScale:${opts.optInt("guiScale", 2)}")
-            appendLine("# Auto-tuned for ${hw.socModel} (${hw.totalRamMb}MB RAM)")
+            appendLine("soundCategory_music:$musicVolume")
+            appendLine("soundCategory_record:$musicVolume")
+            appendLine("# Auto-tuned for ${hw.socModel} (${hw.totalRamMb}MB RAM, ABI=${hw.abi})")
         }
         optionsFile.writeText(lines)
     }

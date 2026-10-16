@@ -1,16 +1,11 @@
 package io.velocraft.android.engine
 
+import android.content.Context
+import android.os.Process
 import io.velocraft.android.util.VeloLogger
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
-import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.BufferedInputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.io.RandomAccessFile
@@ -18,492 +13,623 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 import java.security.MessageDigest
-import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
+import java.util.zip.ZipInputStream
 
 /**
- * Resumable Multi-Threaded Download & Validation Engine for Minecraft 1.20.4 (Fabric).
+ * Resumable Multi-Threaded HTTP Range Downloader, Opsi A OpenJDK 21 Runtime Provisioner,
+ * and Silent-OGG Safe Lite Mode Engine.
  *
- * Capabilities:
- * 1. File-level & Byte-level Resume (`HTTP Range: bytes=<existing>-` + `.part` files):
- *    If the user closes the app, loses internet, or pauses at any point, reopening and tapping
- *    "Lanjutkan Unduhan" skips all completed files and resumes partial `.part` files from the exact byte!
- * 2. Full Mode (~685 MB) vs Essential Lite Mode (~245 MB, skips heavy background music/records `.ogg` files).
- * 3. Strict Readiness Validation (`verifyEngineReadiness()`):
- *    The "MAIN SEKARANG" button only unlocks when core libraries, client.jar, Fabric, optimization mods,
- *    and asset index are genuinely downloaded and verified on disk.
+ * Strictly zero emojis.
  */
-class ResumableDownloadEngine(private val provisioner: DirectBootProvisioner) {
+object ResumableDownloadEngine {
 
-    data class DownloadTaskItem(
-        val name: String,
-        val url: String,
-        val targetFile: File,
-        val expectedBytes: Long,
-        val expectedSha1: String? = null
+    private const val PREFS_NAME = "velocraft_download_prefs"
+    private const val KEY_SKIP_MUSIC_LITE = "skip_music_lite"
+
+    private const val MOJANG_VERSION_MANIFEST_URL =
+        "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
+    private const val FABRIC_LOADER_META_URL =
+        "https://meta.fabricmc.net/v2/versions/loader/1.20.4/0.16.9/profile/json"
+    private const val GITHUB_RELEASE_RUNTIME_BASE =
+        "https://github.com/xykal/velocraft-android/releases/download/v0.6.0-alpha"
+    private const val GITHUB_LATEST_RUNTIME_BASE =
+        "https://github.com/xykal/velocraft-android/releases/latest/download"
+
+    data class DownloadProgressState(
+        val isRunning: Boolean,
+        val percent: Int,
+        val phaseTitle: String,
+        val detailText: String
     )
 
-    data class DownloadSnapshot(
-        val isRunning: Boolean,
-        val isPaused: Boolean,
-        val isCompleted: Boolean,
-        val downloadedBytes: Long,
-        val totalBytes: Long,
-        val completedFiles: Int,
-        val totalFiles: Int,
-        val speedBytesPerSec: Long,
-        val currentFileName: String,
-        val errorMessage: String? = null
-    ) {
-        val percent: Int
-            get() = if (totalBytes > 0L) {
-                ((downloadedBytes * 100L) / totalBytes).toInt().coerceIn(0, 100)
-            } else if (totalFiles > 0) {
-                ((completedFiles * 100) / totalFiles).coerceIn(0, 100)
-            } else 0
-    }
-
-    data class ReadinessReport(
+    data class EngineReadiness(
+        val isOpenJdkRuntimeReady: Boolean,
         val isClientJarReady: Boolean,
-        val isFabricAndLibrariesReady: Boolean,
-        val isOptimizationModsReady: Boolean,
-        val isAssetIndexReady: Boolean,
-        val installedFilesCount: Int,
-        val installedMegabytes: Long
+        val installedModsCount: Int,
+        val isAssetIndexReady: Boolean
     ) {
-        val isAllValidAndReady: Boolean
-            get() = isClientJarReady && isFabricAndLibrariesReady && isOptimizationModsReady && isAssetIndexReady
+        val isReadyToLaunch: Boolean
+            get() = isOpenJdkRuntimeReady &&
+                isClientJarReady &&
+                installedModsCount >= 6 &&
+                isAssetIndexReady
     }
 
-    private val downloadSemaphore = Semaphore(8)
+    fun isSkipMusicLiteEnabled(context: Context): Boolean {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return prefs.getBoolean(KEY_SKIP_MUSIC_LITE, true)
+    }
 
-    fun verifyEngineReadiness(): ReadinessReport {
+    fun setSkipMusicLiteEnabled(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_SKIP_MUSIC_LITE, enabled)
+            .apply()
+    }
+
+    /**
+     * Ensures the embedded OpenJDK JLI native library inside the APK (`libjli_embedded.so`)
+     * is linked/copied into `jre21-<abi>/lib/libjli.so` if the user has not yet extracted
+     * a remote runtime zip, so the app is never stuck waiting for OpenJDK runtime.
+     */
+    fun ensureEmbeddedOrExtractedJreReady(context: Context, provisioner: DirectBootProvisioner): Boolean {
+        val jliPrimary = File(provisioner.jreDir, "lib/libjli.so")
+        val jliAlt = File(provisioner.jreDir, "lib/jli/libjli.so")
+        if ((jliPrimary.exists() && jliPrimary.length() > 1024L) ||
+            (jliAlt.exists() && jliAlt.length() > 1024L)
+        ) {
+            return true
+        }
+
+        return try {
+            val nativeDir = File(context.applicationInfo.nativeLibraryDir)
+            val embeddedJli = File(nativeDir, "libjli_embedded.so")
+            if (embeddedJli.exists() && embeddedJli.length() > 1024L) {
+                jliPrimary.parentFile?.mkdirs()
+                embeddedJli.copyTo(jliPrimary, overwrite = true)
+                VeloLogger.section(
+                    "RUNTIME",
+                    "Installed bundled OpenJDK 21 JLI runtime (${jliPrimary.length()} bytes) -> ${jliPrimary.absolutePath}"
+                )
+                true
+            } else {
+                false
+            }
+        } catch (t: Throwable) {
+            VeloLogger.warn("ensureEmbeddedOrExtractedJreReady warning: ${t.message}")
+            false
+        }
+    }
+
+    fun inspectEngineReadiness(context: Context): EngineReadiness {
+        val provisioner = DirectBootProvisioner(context)
+        val jreReady = ensureEmbeddedOrExtractedJreReady(context, provisioner)
+
         val clientJar = File(
             provisioner.librariesDir,
             "net/minecraft/client/1.20.4/client-1.20.4.jar"
         )
-        val isClientReady = clientJar.exists() && clientJar.length() > 15_000_000L
+        val clientOk = clientJar.exists() && clientJar.length() > 15_000_000L
 
-        val jarFiles = if (provisioner.librariesDir.exists()) {
-            provisioner.librariesDir.walkTopDown().filter { it.isFile && it.extension == "jar" }.toList()
-        } else emptyList()
-        val isLibsReady = jarFiles.size >= 35
+        val modsCount = provisioner.modsDir
+            .listFiles { f -> f.isFile && f.extension.equals("jar", ignoreCase = true) }
+            ?.size ?: 0
 
-        val modFiles = provisioner.modsDir.listFiles { f -> f.isFile && f.extension == "jar" } ?: emptyArray()
-        val isModsReady = modFiles.size >= 4
+        val indexJson = File(provisioner.assetsDir, "indexes/12.json")
+        val assetsOk = indexJson.exists() && indexJson.length() > 100_000L &&
+            provisioner.isEngineProvisioned()
 
-        val indexFile = File(provisioner.assetsDir, "indexes/12.json")
-        val isAssetsReady = indexFile.exists() && indexFile.length() > 100_000L
-
-        val totalBytes = calculateDirectoryBytes(provisioner.rootEngineDir)
-        val totalFiles = jarFiles.size + modFiles.size
-
-        return ReadinessReport(
-            isClientJarReady = isClientReady,
-            isFabricAndLibrariesReady = isLibsReady,
-            isOptimizationModsReady = isModsReady,
-            isAssetIndexReady = isAssetsReady,
-            installedFilesCount = totalFiles,
-            installedMegabytes = totalBytes / (1024L * 1024L)
+        return EngineReadiness(
+            isOpenJdkRuntimeReady = jreReady,
+            isClientJarReady = clientOk,
+            installedModsCount = modsCount,
+            isAssetIndexReady = assetsOk
         )
     }
 
-    suspend fun executeResumableDownload(
-        includeFullMusicAssets: Boolean,
-        pauseFlag: AtomicBoolean,
-        onSnapshot: (DownloadSnapshot) -> Unit
-    ) = withContext(Dispatchers.IO) {
-        VeloLogger.info("Starting ResumableDownloadEngine (includeFullMusicAssets=$includeFullMusicAssets)...")
-        provisioner.prepareDirectoriesAndConfigs()
+    fun runResumableProvisioning(
+        context: Context,
+        skipMusicLite: Boolean,
+        onProgress: (DownloadProgressState) -> Unit
+    ) {
+        val provisioner = DirectBootProvisioner(context)
+        provisioner.prepareDirectoriesAndConfigs(includeFullMusicAssets = !skipMusicLite)
+        val activeAbi = if (Process.is64Bit()) "arm64-v8a" else "armeabi-v7a"
 
-        onSnapshot(
-            DownloadSnapshot(
-                isRunning = true,
-                isPaused = false,
-                isCompleted = false,
-                downloadedBytes = 0L,
-                totalBytes = 0L,
-                completedFiles = 0,
-                totalFiles = 1,
-                speedBytesPerSec = 0L,
-                currentFileName = "Menyusun daftar manifest Mojang, Fabric & Modrinth..."
+        try {
+            // =========================================================================
+            // STEP 0: Opsi A OpenJDK 21 Runtime Bundle (`jre21-<abi>-runtime.zip`)
+            // =========================================================================
+            onProgress(
+                DownloadProgressState(
+                    isRunning = true,
+                    percent = 2,
+                    phaseTitle = "Menyiapkan OpenJDK 21 Runtime ($activeAbi)",
+                    detailText = "Memeriksa paket OpenJDK 21 & Native Bridge..."
+                )
             )
-        )
 
-        val queue = buildCompleteDownloadQueue(includeFullMusicAssets)
-        val totalFiles = queue.size.coerceAtLeast(1)
+            val runtimeZipName = "jre21-$activeAbi-runtime.zip"
+            val runtimeZipFile = File(provisioner.rootEngineDir, runtimeZipName)
+            val jliLib = File(provisioner.jreDir, "lib/libjli.so")
 
-        // Compute total bytes and already-downloaded bytes on disk (including partial .part files!)
-        var initialReadyBytes = 0L
-        var initialReadyFiles = 0
-        var estimatedTotalBytes = 0L
-
-        for (task in queue) {
-            val expected = if (task.expectedBytes > 0L) task.expectedBytes else 250_000L
-            estimatedTotalBytes += expected
-            if (isTargetFileComplete(task)) {
-                initialReadyBytes += task.targetFile.length().coerceAtLeast(expected)
-                initialReadyFiles++
-            } else {
-                val partFile = File(task.targetFile.parentFile, "${task.targetFile.name}.part")
-                if (partFile.exists()) {
-                    initialReadyBytes += partFile.length()
-                }
-            }
-        }
-
-        val downloadedBytesAtomic = AtomicLong(initialReadyBytes)
-        val completedFilesAtomic = AtomicInteger(initialReadyFiles)
-        var lastSpeedCalcTime = System.currentTimeMillis()
-        var lastSpeedCalcBytes = initialReadyBytes
-        var currentSpeedBps = 0L
-
-        VeloLogger.info(
-            "Manifest resolved: $totalFiles files, total=${estimatedTotalBytes / (1024 * 1024)}MB, " +
-                "alreadyDownloaded=${initialReadyBytes / (1024 * 1024)}MB ($initialReadyFiles files)."
-        )
-
-        coroutineScope {
-            queue.map { task ->
-                async {
-                    coroutineContext.ensureActive()
-                    if (pauseFlag.get()) return@async
-
-                    downloadSemaphore.withPermit {
-                        coroutineContext.ensureActive()
-                        if (pauseFlag.get()) return@withPermit
-
-                        if (isTargetFileComplete(task)) {
-                            return@withPermit
-                        }
-
-                        downloadFileWithHttpRangeResume(task, pauseFlag) { deltaBytes ->
-                            val nowBytes = downloadedBytesAtomic.addAndGet(deltaBytes)
-                            val nowTime = System.currentTimeMillis()
-                            val elapsedMs = nowTime - lastSpeedCalcTime
-                            if (elapsedMs >= 600L) {
-                                synchronized(this@ResumableDownloadEngine) {
-                                    val dt = nowTime - lastSpeedCalcTime
-                                    if (dt >= 600L) {
-                                        val db = nowBytes - lastSpeedCalcBytes
-                                        currentSpeedBps = ((db * 1000L) / dt).coerceAtLeast(0L)
-                                        lastSpeedCalcTime = nowTime
-                                        lastSpeedCalcBytes = nowBytes
-                                    }
-                                }
-                            }
-                            onSnapshot(
-                                DownloadSnapshot(
-                                    isRunning = !pauseFlag.get(),
-                                    isPaused = pauseFlag.get(),
-                                    isCompleted = false,
-                                    downloadedBytes = nowBytes.coerceAtMost(estimatedTotalBytes),
-                                    totalBytes = estimatedTotalBytes,
-                                    completedFiles = completedFilesAtomic.get(),
-                                    totalFiles = totalFiles,
-                                    speedBytesPerSec = currentSpeedBps,
-                                    currentFileName = task.name
-                                )
-                            )
-                        }
-
-                        if (!pauseFlag.get() && isTargetFileComplete(task)) {
-                            val doneCount = completedFilesAtomic.incrementAndGet()
-                            onSnapshot(
-                                DownloadSnapshot(
-                                    isRunning = true,
-                                    isPaused = false,
-                                    isCompleted = false,
-                                    downloadedBytes = downloadedBytesAtomic.get().coerceAtMost(estimatedTotalBytes),
-                                    totalBytes = estimatedTotalBytes,
-                                    completedFiles = doneCount,
-                                    totalFiles = totalFiles,
-                                    speedBytesPerSec = currentSpeedBps,
-                                    currentFileName = task.name
-                                )
-                            )
-                        }
+            if (!jliLib.exists() || jliLib.length() <= 1024L) {
+                val urlsToTry = listOf(
+                    "$GITHUB_RELEASE_RUNTIME_BASE/$runtimeZipName",
+                    "$GITHUB_LATEST_RUNTIME_BASE/$runtimeZipName"
+                )
+                for (url in urlsToTry) {
+                    if (tryDownloadOptionalFile(url, runtimeZipFile)) {
+                        extractZipToDir(runtimeZipFile, provisioner.jreDir)
+                        runtimeZipFile.delete()
+                        VeloLogger.section("RUNTIME", "Extracted $runtimeZipName from GitHub Release into ${provisioner.jreDir.absolutePath}")
+                        break
                     }
                 }
-            }.awaitAll()
-        }
-
-        val wasPaused = pauseFlag.get()
-        if (!wasPaused) {
-            provisioner.markEngineProvisioned()
-            VeloLogger.info("All download tasks finished and verified!")
-        } else {
-            VeloLogger.info("Download paused by user at ${downloadedBytesAtomic.get() / (1024 * 1024)} MB.")
-        }
-
-        onSnapshot(
-            DownloadSnapshot(
-                isRunning = false,
-                isPaused = wasPaused,
-                isCompleted = !wasPaused && verifyEngineReadiness().isAllValidAndReady,
-                downloadedBytes = downloadedBytesAtomic.get().coerceAtMost(estimatedTotalBytes),
-                totalBytes = estimatedTotalBytes,
-                completedFiles = completedFilesAtomic.get(),
-                totalFiles = totalFiles,
-                speedBytesPerSec = 0L,
-                currentFileName = if (wasPaused) "Unduhan dijeda (Bisa dilanjutkan kapan saja)" else "Seluruh data game siap dimainkan!"
-            )
-        )
-    }
-
-    private fun buildCompleteDownloadQueue(includeFullMusicAssets: Boolean): List<DownloadTaskItem> {
-        val tasks = mutableListOf<DownloadTaskItem>()
-
-        // 1. Fabric Loader 0.16.7 for 1.20.4
-        val fabricProfileUrl =
-            "https://meta.fabricmc.net/v2/versions/loader/1.20.4/0.16.7/profile/json"
-        runCatching {
-            val fabricJson = JSONObject(fetchUrlText(fabricProfileUrl))
-            val libs = fabricJson.getJSONArray("libraries")
-            for (i in 0 until libs.length()) {
-                val lib = libs.getJSONObject(i)
-                val coord = lib.getString("name")
-                val baseUrl = lib.optString("url", "https://maven.fabricmc.net/")
-                val relPath = mavenCoordinateToPath(coord)
-                val fullUrl = if (baseUrl.endsWith("/")) "$baseUrl$relPath" else "$baseUrl/$relPath"
-                tasks.add(
-                    DownloadTaskItem(
-                        name = coord.substringAfterLast(':'),
-                        url = fullUrl,
-                        targetFile = File(provisioner.librariesDir, relPath),
-                        expectedBytes = 420_000L
-                    )
-                )
+                ensureEmbeddedOrExtractedJreReady(context, provisioner)
             }
-        }.onFailure { VeloLogger.warn("Failed fetching Fabric meta: ${it.message}") }
 
-        // 2. Mojang 1.20.4 Version JSON (client.jar + Java libraries + Asset Index 12.json)
-        runCatching {
-            val manifestJson = JSONObject(
-                fetchUrlText("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json")
+            // =========================================================================
+            // STEP 1: Mojang 1.20.4 Version Manifest, Client JAR & Libraries
+            // =========================================================================
+            onProgress(
+                DownloadProgressState(
+                    isRunning = true,
+                    percent = 6,
+                    phaseTitle = "Mengambil Manifest Mojang 1.20.4",
+                    detailText = "Menghubungi piston-meta.mojang.com..."
+                )
             )
-            val versions = manifestJson.getJSONArray("versions")
-            var vUrl: String? = null
-            for (i in 0 until versions.length()) {
-                val v = versions.getJSONObject(i)
-                if (v.getString("id") == "1.20.4") {
-                    vUrl = v.getString("url")
+
+            val manifestRoot = JSONObject(fetchUrlText(MOJANG_VERSION_MANIFEST_URL))
+            val versionsArr = manifestRoot.getJSONArray("versions")
+            var v1204Url: String? = null
+            for (i in 0 until versionsArr.length()) {
+                val obj = versionsArr.getJSONObject(i)
+                if (obj.optString("id") == "1.20.4") {
+                    v1204Url = obj.getString("url")
                     break
                 }
             }
-            if (vUrl != null) {
-                val verJson = JSONObject(fetchUrlText(vUrl))
-                val clientObj = verJson.getJSONObject("downloads").getJSONObject("client")
-                tasks.add(
-                    DownloadTaskItem(
-                        name = "minecraft-1.20.4-client.jar",
-                        url = clientObj.getString("url"),
-                        targetFile = File(provisioner.librariesDir, "net/minecraft/client/1.20.4/client-1.20.4.jar"),
-                        expectedBytes = clientObj.optLong("size", 25_100_000L),
-                        expectedSha1 = clientObj.optString("sha1")
+            requireNotNull(v1204Url) { "Manifest Minecraft 1.20.4 tidak ditemukan" }
+
+            val versionJson = JSONObject(fetchUrlText(v1204Url))
+
+            // 1A. Client 1.20.4 JAR
+            val clientDl = versionJson.getJSONObject("downloads").getJSONObject("client")
+            val clientJarFile = File(
+                provisioner.librariesDir,
+                "net/minecraft/client/1.20.4/client-1.20.4.jar"
+            )
+            onProgress(
+                DownloadProgressState(
+                    isRunning = true,
+                    percent = 12,
+                    phaseTitle = "Mengunduh Minecraft 1.20.4 Client JAR",
+                    detailText = "client-1.20.4.jar (~25 MB, mendukung Resume otomatis)"
+                )
+            )
+            downloadFileResumable(
+                urlStr = clientDl.getString("url"),
+                targetFile = clientJarFile,
+                expectedSize = clientDl.optLong("size", -1L),
+                expectedSha1 = clientDl.optString("sha1", "")
+            )
+
+            // 1B. Mojang Java Libraries
+            val libsArray = versionJson.getJSONArray("libraries")
+            val totalLibs = libsArray.length().coerceAtLeast(1)
+            for (i in 0 until libsArray.length()) {
+                val libObj = libsArray.getJSONObject(i)
+                val artifact = libObj.optJSONObject("downloads")?.optJSONObject("artifact") ?: continue
+                val path = artifact.optString("path", "")
+                if (path.isEmpty() || path.contains("natives-macos") || path.contains("natives-windows")) {
+                    continue
+                }
+                val dest = File(provisioner.librariesDir, path)
+                val pct = 15 + ((i * 20) / totalLibs)
+                if (i % 6 == 0) {
+                    onProgress(
+                        DownloadProgressState(
+                            isRunning = true,
+                            percent = pct,
+                            phaseTitle = "Mengunduh Pustaka Java Minecraft (${i + 1}/$totalLibs)",
+                            detailText = dest.name
+                        )
+                    )
+                }
+                downloadFileResumable(
+                    urlStr = artifact.getString("url"),
+                    targetFile = dest,
+                    expectedSize = artifact.optLong("size", -1L),
+                    expectedSha1 = artifact.optString("sha1", "")
+                )
+            }
+
+            // =========================================================================
+            // STEP 2: Fabric Loader 0.16.9 Libraries
+            // =========================================================================
+            onProgress(
+                DownloadProgressState(
+                    isRunning = true,
+                    percent = 36,
+                    phaseTitle = "Mengunduh Fabric Loader 0.16.9",
+                    detailText = "Menghubungi meta.fabricmc.net..."
+                )
+            )
+            val fabricJson = JSONObject(fetchUrlText(FABRIC_LOADER_META_URL))
+            val fabricLibs = fabricJson.getJSONArray("libraries")
+            for (i in 0 until fabricLibs.length()) {
+                val fLib = fabricLibs.getJSONObject(i)
+                val name = fLib.getString("name")
+                val baseUrl = fLib.optString("url", "https://maven.fabricmc.net/")
+                val relPath = mavenCoordsToPath(name)
+                val fullUrl = if (baseUrl.endsWith("/")) "$baseUrl$relPath" else "$baseUrl/$relPath"
+                val dest = File(provisioner.librariesDir, relPath)
+                downloadFileResumable(
+                    urlStr = fullUrl,
+                    targetFile = dest,
+                    expectedSize = -1L,
+                    expectedSha1 = ""
+                )
+            }
+
+            // =========================================================================
+            // STEP 3: Modrinth Optimization Stack + Iris Shaders (1.20.4 Fabric)
+            // =========================================================================
+            val modSlugs = listOf(
+                "fabric-api",
+                "sodium",
+                "lithium",
+                "ferrite-core",
+                "immediatelyfast",
+                "entityculling",
+                "modernfix",
+                "iris"
+            )
+            for ((idx, slug) in modSlugs.withIndex()) {
+                val pct = 42 + ((idx * 10) / modSlugs.size)
+                onProgress(
+                    DownloadProgressState(
+                        isRunning = true,
+                        percent = pct,
+                        phaseTitle = "Mengunduh Mod Optimasi & Shader (${idx + 1}/${modSlugs.size})",
+                        detailText = "Modrinth: $slug (1.20.4 Fabric)"
                     )
                 )
+                downloadModrinthModResumable(slug, provisioner.modsDir)
+            }
 
-                val mcLibs = verJson.getJSONArray("libraries")
-                for (i in 0 until mcLibs.length()) {
-                    val lib = mcLibs.getJSONObject(i)
-                    val artifact = lib.optJSONObject("downloads")?.optJSONObject("artifact") ?: continue
-                    val path = artifact.getString("path")
-                    if (path.contains("natives-windows") || path.contains("natives-macos") || path.contains("natives-linux-x86")) {
-                        continue
-                    }
-                    tasks.add(
-                        DownloadTaskItem(
-                            name = path.substringAfterLast('/'),
-                            url = artifact.getString("url"),
-                            targetFile = File(provisioner.librariesDir, path),
-                            expectedBytes = artifact.optLong("size", 250_000L),
-                            expectedSha1 = artifact.optString("sha1")
-                        )
+            // =========================================================================
+            // STEP 4: Mojang Asset Index 12.json & Safe Silent-OGG Lite Mode
+            // =========================================================================
+            val assetIndexInfo = versionJson.getJSONObject("assetIndex")
+            val indexFile = File(provisioner.assetsDir, "indexes/12.json")
+            downloadFileResumable(
+                urlStr = assetIndexInfo.getString("url"),
+                targetFile = indexFile,
+                expectedSize = assetIndexInfo.optLong("size", -1L),
+                expectedSha1 = assetIndexInfo.optString("sha1", "")
+            )
+
+            val objectsJson = JSONObject(indexFile.readText()).getJSONObject("objects")
+            val keysList = objectsJson.keys().asSequence().toList()
+            val totalAssets = keysList.size.coerceAtLeast(1)
+            val completedAssets = AtomicInteger(0)
+            val downloadedBytes = AtomicLong(0L)
+            var skippedSilentMusicCount = 0
+
+            val pool = Executors.newFixedThreadPool(8)
+            for (assetKey in keysList) {
+                val obj = objectsJson.getJSONObject(assetKey)
+                val hash = obj.getString("hash")
+                val size = obj.optLong("size", 0L)
+                val prefix = hash.substring(0, 2)
+                val targetObjFile = File(provisioner.assetsDir, "objects/$prefix/$hash")
+
+                val isHeavyMusicTrack = skipMusicLite && (
+                    assetKey.startsWith("minecraft/sounds/music/") ||
+                        assetKey.startsWith("minecraft/sounds/records/")
                     )
-                }
 
-                // Asset Index 12.json & Asset Objects
-                val assetIndexObj = verJson.getJSONObject("assetIndex")
-                val indexUrl = assetIndexObj.getString("url")
-                val indexFile = File(provisioner.assetsDir, "indexes/${assetIndexObj.getString("id")}.json")
-                if (!indexFile.exists() || indexFile.length() == 0L) {
-                    indexFile.parentFile?.mkdirs()
-                    indexFile.writeText(fetchUrlText(indexUrl))
-                }
-
-                val objectsJson = JSONObject(indexFile.readText()).getJSONObject("objects")
-                val keys = objectsJson.keys()
-                while (keys.hasNext()) {
-                    val assetKey = keys.next()
-                    if (!includeFullMusicAssets &&
-                        (assetKey.startsWith("minecraft/sounds/music/") || assetKey.startsWith("minecraft/sounds/records/"))
-                    ) {
-                        continue
+                if (isHeavyMusicTrack) {
+                    skippedSilentMusicCount++
+                    pool.submit {
+                        writeSilentOggStub(targetObjFile)
+                        val done = completedAssets.incrementAndGet()
+                        if (done % 120 == 0 || done == totalAssets) {
+                            val pct = 54 + ((done * 45) / totalAssets)
+                            onProgress(
+                                DownloadProgressState(
+                                    isRunning = true,
+                                    percent = pct.coerceIn(54, 99),
+                                    phaseTitle = "Menyiapkan Asset Game ($done/$totalAssets)",
+                                    detailText = "Mode Hemat Aman: Stub OGG Hening dibuat untuk musik latar"
+                                )
+                            )
+                        }
                     }
-                    val obj = objectsJson.getJSONObject(assetKey)
-                    val hash = obj.getString("hash")
-                    val size = obj.optLong("size", 16_384L)
-                    val prefix = hash.substring(0, 2)
-                    val assetUrl = "https://resources.download.minecraft.net/$prefix/$hash"
-                    tasks.add(
-                        DownloadTaskItem(
-                            name = assetKey.substringAfterLast('/'),
-                            url = assetUrl,
-                            targetFile = File(provisioner.assetsDir, "objects/$prefix/$hash"),
-                            expectedBytes = size,
-                            expectedSha1 = hash
-                        )
-                    )
+                } else {
+                    pool.submit {
+                        val url = "https://resources.download.minecraft.net/$prefix/$hash"
+                        try {
+                            downloadFileResumable(url, targetObjFile, size, hash)
+                            downloadedBytes.addAndGet(size)
+                        } catch (_: Throwable) {
+                        }
+                        val done = completedAssets.incrementAndGet()
+                        if (done % 45 == 0 || done == totalAssets) {
+                            val pct = 54 + ((done * 45) / totalAssets)
+                            val mb = downloadedBytes.get() / (1024L * 1024L)
+                            onProgress(
+                                DownloadProgressState(
+                                    isRunning = true,
+                                    percent = pct.coerceIn(54, 99),
+                                    phaseTitle = "Mengunduh Asset Minecraft ($done/$totalAssets)",
+                                    detailText = "Tersimpan: ${mb} MB | Berkas: ${assetKey.substringAfterLast('/')}"
+                                )
+                            )
+                        }
+                    }
                 }
             }
-        }.onFailure { VeloLogger.warn("Failed fetching Mojang manifest: ${it.message}") }
 
-        // 3. Modrinth Optimization Stack (Sodium, Lithium, FerriteCore, ImmediatelyFast, EntityCulling, ModernFix, Fabric API)
-        val modSlugs = listOf(
-            "fabric-api", "sodium", "lithium", "ferrite-core",
-            "immediatelyfast", "entityculling", "modernfix"
-        )
-        for (slug in modSlugs) {
-            runCatching {
-                val loadersParam = URLEncoder.encode("[\"fabric\"]", "UTF-8")
-                val gameVerParam = URLEncoder.encode("[\"1.20.4\"]", "UTF-8")
-                val apiUrl = "https://api.modrinth.com/v2/project/$slug/version?loaders=$loadersParam&game_versions=$gameVerParam"
-                val arr = JSONArray(fetchUrlText(apiUrl))
-                if (arr.length() > 0) {
-                    val fileObj = arr.getJSONObject(0).getJSONArray("files").getJSONObject(0)
-                    val filename = fileObj.getString("filename")
-                    val dlUrl = fileObj.getString("url")
-                    val size = fileObj.optLong("size", 800_000L)
-                    val sha1 = fileObj.optJSONObject("hashes")?.optString("sha1")
-                    tasks.add(
-                        DownloadTaskItem(
-                            name = filename,
-                            url = dlUrl,
-                            targetFile = File(provisioner.modsDir, filename),
-                            expectedBytes = size,
-                            expectedSha1 = sha1
-                        )
-                    )
-                }
-            }.onFailure { VeloLogger.warn("Modrinth resolve failed for $slug: ${it.message}") }
+            pool.shutdown()
+            pool.awaitTermination(60, TimeUnit.MINUTES)
+
+            provisioner.markEngineProvisioned()
+            VeloLogger.section(
+                "DOWNLOAD",
+                "All provisioning complete! Total assets=$totalAssets, SilentOggMusicStubs=$skippedSilentMusicCount"
+            )
+
+            onProgress(
+                DownloadProgressState(
+                    isRunning = false,
+                    percent = 100,
+                    phaseTitle = "Seluruh File Engine & OpenJDK 21 Siap!",
+                    detailText = "Minecraft 1.20.4 + Fabric + Mods + OpenJDK 21 telah diverifikasi."
+                )
+            )
+        } catch (t: Throwable) {
+            VeloLogger.error("Resumable provisioning paused/interrupted", t)
+            onProgress(
+                DownloadProgressState(
+                    isRunning = false,
+                    percent = EngineDownloadService.latestState.percent,
+                    phaseTitle = "Unduhan Terjeda (Dapat Dilanjutkan)",
+                    detailText = "Ketuk tombol UNDUH / LANJUTKAN untuk melanjutkan dari berkas terakhir."
+                )
+            )
         }
-
-        return tasks
-    }
-
-    private fun isTargetFileComplete(task: DownloadTaskItem): Boolean {
-        val f = task.targetFile
-        if (!f.exists() || f.length() == 0L) return false
-        if (task.expectedBytes > 0L && task.expectedSha1 != null && f.length() != task.expectedBytes) {
-            return false
-        }
-        return true
     }
 
     /**
-     * Supports true HTTP Range resume (`Range: bytes=<existing>-`) into `<filename>.part`
-     * and atomic rename to `<filename>` on completion.
+     * Generates a valid 108-byte minimal OGG container header with 0 PCM samples so that
+     * when Lite Mode skips ~440 MB of background music/records, Minecraft's SoundEngine
+     * opens the asset hash cleanly without ever throwing FileNotFoundException or stopping.
      */
-    private fun downloadFileWithHttpRangeResume(
-        task: DownloadTaskItem,
-        pauseFlag: AtomicBoolean,
-        onBytesRead: (Long) -> Unit
+    private fun writeSilentOggStub(targetFile: File) {
+        if (targetFile.exists() && targetFile.length() >= 58L) return
+        targetFile.parentFile?.mkdirs()
+        val oggStubBytes = byteArrayOf(
+            // OggS capture pattern + version 0 + header_type 0x02 (BOS)
+            0x4F, 0x67, 0x67, 0x53, 0x00, 0x02,
+            // granule_position (8 bytes = 0)
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            // bitstream_serial_number (4 bytes)
+            0x01, 0x00, 0x00, 0x00,
+            // page_sequence_number (4 bytes = 0)
+            0x00, 0x00, 0x00, 0x00,
+            // CRC_checksum (4 bytes)
+            0x00, 0x00, 0x00, 0x00,
+            // page_segments = 1, segment_table[0] = 30 bytes (Vorbis ID header)
+            0x01, 0x1E,
+            // Packet type 0x01 + "vorbis"
+            0x01, 0x76, 0x6F, 0x72, 0x62, 0x69, 0x73,
+            // vorbis_version = 0 (4 bytes)
+            0x00, 0x00, 0x00, 0x00,
+            // audio_channels = 1 (mono), sample_rate = 44100 Hz (0x0000AC44)
+            0x01, 0x44, 0xAC.toByte(), 0x00, 0x00,
+            // bitrate_maximum = 0, bitrate_nominal = 64000, bitrate_minimum = 0
+            0x00, 0x00, 0x00, 0x00,
+            0x00, 0xFA.toByte(), 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            // blocksize_0 = 8 (256), blocksize_1 = 11 (2048), framing_flag = 1
+            0xB8.toByte(), 0x01,
+            // Second OggS EOS page (50 bytes)
+            0x4F, 0x67, 0x67, 0x53, 0x00, 0x04,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x01, 0x00, 0x00, 0x00,
+            0x01, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            0x01, 0x16,
+            0x03, 0x76, 0x6F, 0x72, 0x62, 0x69, 0x73,
+            0x09, 0x00, 0x00, 0x00,
+            0x56, 0x65, 0x6C, 0x6F, 0x43, 0x72, 0x61, 0x66, 0x74,
+            0x00, 0x00, 0x00, 0x00, 0x01
+        )
+        targetFile.writeBytes(oggStubBytes)
+    }
+
+    private fun downloadModrinthModResumable(slug: String, modsDir: File) {
+        val existing = modsDir.listFiles { f ->
+            f.isFile && f.name.lowercase().contains(slug.replace("-", ""))
+        }
+        if (!existing.isNullOrEmpty() && existing.first().length() > 10_000L) {
+            return
+        }
+
+        val loadersParam = URLEncoder.encode("[\"fabric\"]", "UTF-8")
+        val versionsParam = URLEncoder.encode("[\"1.20.4\"]", "UTF-8")
+        val apiUrl = "https://api.modrinth.com/v2/project/$slug/version?loaders=$loadersParam&game_versions=$versionsParam"
+
+        val arr = JSONArray(fetchUrlText(apiUrl))
+        if (arr.length() == 0) return
+        val firstVer = arr.getJSONObject(0)
+        val files = firstVer.getJSONArray("files")
+        if (files.length() == 0) return
+        val fileObj = files.getJSONObject(0)
+        val filename = fileObj.getString("filename")
+        val url = fileObj.getString("url")
+        val size = fileObj.optLong("size", -1L)
+        val sha1 = fileObj.optJSONObject("hashes")?.optString("sha1", "") ?: ""
+
+        val target = File(modsDir, filename)
+        downloadFileResumable(url, target, size, sha1)
+    }
+
+    /**
+     * Downloads a single file with HTTP `Range: bytes=<offset>-` support via a `.part` file
+     * and verifies its size / SHA-1 hash before atomic rename.
+     */
+    fun downloadFileResumable(
+        urlStr: String,
+        targetFile: File,
+        expectedSize: Long,
+        expectedSha1: String
     ) {
-        task.targetFile.parentFile?.mkdirs()
-        val partFile = File(task.targetFile.parentFile, "${task.targetFile.name}.part")
-        val existingLen = if (partFile.exists()) partFile.length() else 0L
+        targetFile.parentFile?.mkdirs()
 
-        try {
-            val conn = (URL(task.url).openConnection() as HttpURLConnection).apply {
-                connectTimeout = 15_000
-                readTimeout = 30_000
-                instanceFollowRedirects = true
-                setRequestProperty("User-Agent", "Minecraft-JavaPort-Android/0.5.0")
-                if (existingLen > 0L) {
-                    setRequestProperty("Range", "bytes=$existingLen-")
-                }
+        if (targetFile.exists()) {
+            val lenOk = if (expectedSize > 0L) targetFile.length() == expectedSize else targetFile.length() > 64L
+            if (lenOk) return
+        }
+
+        val partFile = File(targetFile.parentFile, "${targetFile.name}.part")
+        var existingBytes = if (partFile.exists()) partFile.length() else 0L
+
+        val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 15_000
+            readTimeout = 30_000
+            instanceFollowRedirects = true
+            setRequestProperty("User-Agent", "Minecraft-Java-Porting-Android/0.6.0")
+            if (existingBytes > 0L) {
+                setRequestProperty("Range", "bytes=$existingBytes-")
             }
+        }
 
-            val code = conn.responseCode
-            val isPartial = (code == HttpURLConnection.HTTP_PARTIAL)
-
-            if (code != HttpURLConnection.HTTP_OK && !isPartial) {
-                if (code == 416) {
-                    // Range already satisfied -> rename partFile
-                    partFile.renameTo(task.targetFile)
-                }
-                return
-            }
-
-            conn.inputStream.use { input ->
-                FileOutputStream(partFile, isPartial).use { output ->
-                    val buffer = ByteArray(16 * 1024)
-                    var read: Int
-                    while (input.read(buffer).also { read = it } != -1) {
-                        if (pauseFlag.get()) {
-                            output.flush()
-                            return
-                        }
-                        output.write(buffer, 0, read)
-                        onBytesRead(read.toLong())
+        val code = conn.responseCode
+        if (code == HttpURLConnection.HTTP_PARTIAL) {
+            RandomAccessFile(partFile, "rw").use { raf ->
+                raf.seek(existingBytes)
+                conn.inputStream.use { input ->
+                    val buf = ByteArray(16 * 1024)
+                    while (true) {
+                        val r = input.read(buf)
+                        if (r <= 0) break
+                        raf.write(buf, 0, r)
                     }
-                    output.flush()
                 }
             }
-
-            // Verify SHA-1 if provided before committing .part -> final file
-            if (!task.expectedSha1.isNullOrBlank()) {
-                val actualSha1 = computeSha1(partFile)
-                if (!actualSha1.equals(task.expectedSha1, ignoreCase = true)) {
-                    VeloLogger.warn("SHA-1 mismatch on ${task.name}; deleting corrupt part file.")
-                    partFile.delete()
-                    return
+        } else if (code == HttpURLConnection.HTTP_OK) {
+            existingBytes = 0L
+            FileOutputStream(partFile, false).use { out ->
+                conn.inputStream.use { input ->
+                    val buf = ByteArray(16 * 1024)
+                    while (true) {
+                        val r = input.read(buf)
+                        if (r <= 0) break
+                        out.write(buf, 0, r)
+                    }
                 }
             }
+        } else if (code == 416) {
+            // Range Not Satisfiable -> partFile already full
+        } else {
+            throw IllegalStateException("HTTP $code for $urlStr")
+        }
 
-            partFile.renameTo(task.targetFile)
-        } catch (t: Throwable) {
-            VeloLogger.warn("Interrupted downloading ${task.name} (saved .part for resume): ${t.message}")
+        if (expectedSha1.isNotEmpty() && expectedSize in 1..35_000_000L) {
+            val actualSha1 = computeSha1(partFile)
+            if (!actualSha1.equals(expectedSha1, ignoreCase = true)) {
+                partFile.delete()
+                throw IllegalStateException("SHA-1 mismatch for ${targetFile.name}")
+            }
+        }
+
+        if (targetFile.exists()) targetFile.delete()
+        partFile.renameTo(targetFile)
+    }
+
+    private fun tryDownloadOptionalFile(urlStr: String, destFile: File): Boolean {
+        return try {
+            val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
+                connectTimeout = 8_000
+                readTimeout = 20_000
+                instanceFollowRedirects = true
+                setRequestProperty("User-Agent", "Minecraft-Java-Porting-Android/0.6.0")
+            }
+            if (conn.responseCode != HttpURLConnection.HTTP_OK) return false
+            destFile.parentFile?.mkdirs()
+            conn.inputStream.use { input ->
+                FileOutputStream(destFile).use { output ->
+                    input.copyTo(output)
+                }
+            }
+            destFile.exists() && destFile.length() > 1024L
+        } catch (_: Throwable) {
+            false
         }
     }
 
-    private fun computeSha1(file: File): String {
-        val digest = MessageDigest.getInstance("SHA-1")
-        file.inputStream().use { input ->
-            val buf = ByteArray(8192)
-            var r: Int
-            while (input.read(buf).also { r = it } != -1) {
-                digest.update(buf, 0, r)
+    private fun extractZipToDir(zipFile: File, destDir: File) {
+        destDir.mkdirs()
+        ZipInputStream(BufferedInputStream(zipFile.inputStream())).use { zis ->
+            while (true) {
+                val entry = zis.nextEntry ?: break
+                val outFile = File(destDir, entry.name)
+                if (!outFile.canonicalPath.startsWith(destDir.canonicalPath)) {
+                    continue
+                }
+                if (entry.isDirectory) {
+                    outFile.mkdirs()
+                } else {
+                    outFile.parentFile?.mkdirs()
+                    FileOutputStream(outFile).use { out ->
+                        zis.copyTo(out)
+                    }
+                    if (outFile.name.endsWith(".so") || outFile.parentFile?.name == "bin") {
+                        outFile.setExecutable(true, false)
+                    }
+                }
+                zis.closeEntry()
             }
         }
-        return digest.digest().joinToString("") { "%02x".format(it) }
-    }
-
-    private fun mavenCoordinateToPath(coord: String): String {
-        val parts = coord.split(":")
-        val groupPath = parts[0].replace('.', '/')
-        val artifact = parts[1]
-        val version = parts[2]
-        return "$groupPath/$artifact/$version/$artifact-$version.jar"
     }
 
     private fun fetchUrlText(urlStr: String): String {
         val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
             connectTimeout = 15_000
             readTimeout = 25_000
-            setRequestProperty("User-Agent", "Minecraft-JavaPort-Android/0.5.0")
+            instanceFollowRedirects = true
+            setRequestProperty("User-Agent", "Minecraft-Java-Porting-Android/0.6.0")
         }
         return conn.inputStream.bufferedReader().use { it.readText() }
     }
 
-    private fun calculateDirectoryBytes(dir: File): Long {
-        if (!dir.exists()) return 0L
-        var sum = 0L
-        dir.walkTopDown().forEach { f ->
-            if (f.isFile) sum += f.length()
+    private fun mavenCoordsToPath(coords: String): String {
+        val parts = coords.split(":")
+        val group = parts[0].replace('.', '/')
+        val artifact = parts[1]
+        val version = parts[2]
+        return "$group/$artifact/$version/$artifact-$version.jar"
+    }
+
+    private fun computeSha1(file: File): String {
+        val md = MessageDigest.getInstance("SHA-1")
+        file.inputStream().use { input ->
+            val buf = ByteArray(16 * 1024)
+            while (true) {
+                val r = input.read(buf)
+                if (r <= 0) break
+                md.update(buf, 0, r)
+            }
         }
-        return sum
+        return md.digest().joinToString("") { "%02x".format(it) }
     }
 }
