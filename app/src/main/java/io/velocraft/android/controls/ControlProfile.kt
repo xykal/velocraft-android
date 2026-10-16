@@ -104,7 +104,7 @@ object ControlProfileManager {
      */
     fun createCompetitivePvpLayout(): MutableList<HudButtonConfig> = mutableListOf(
         HudButtonConfig("move_w", "W", 0.14f, 0.54f, 32f, 0.82f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_W, accentHex = 0xFF78736A.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("move_s", "S", 0.14f, 0.78f, 32f, 0.82f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_S, accentHex = 0.78736A.toInt(), shape = ButtonShape.ROUND_RECT),
+        HudButtonConfig("move_s", "S", 0.14f, 0.78f, 32f, 0.82f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_S, accentHex = 0xFF78736A.toInt(), shape = ButtonShape.ROUND_RECT),
         HudButtonConfig("move_a", "A", 0.06f, 0.66f, 32f, 0.82f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_A, accentHex = 0xFF78736A.toInt(), shape = ButtonShape.ROUND_RECT),
         HudButtonConfig("move_d", "D", 0.22f, 0.66f, 32f, 0.82f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_D, accentHex = 0xFF78736A.toInt(), shape = ButtonShape.ROUND_RECT),
         HudButtonConfig("sprint_lock", "SPRINT", 0.14f, 0.38f, 24f, 0.86f, ActionType.KEY_TOGGLE, NativeEngineBridge.KEY_LEFT_CONTROL, isToggle = true, accentHex = 0xFF4E8C57.toInt(), shape = ButtonShape.PILL),
