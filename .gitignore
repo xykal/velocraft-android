@@ -28,6 +28,7 @@ keystore.properties
 **/minecraft-assets/
 *.jar
 !gradle/wrapper/gradle-wrapper.jar
+!app/src/main/assets/lwjgl3/lwjgl-glfw-classes.jar
 
 # OS Files
 .DS_Store
