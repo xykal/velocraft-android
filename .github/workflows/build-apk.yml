@@ -70,7 +70,12 @@ jobs:
             SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager | head -n 1)
           fi
           yes | "$SDKMANAGER" --licenses > /dev/null || true
-          "$SDKMANAGER" --install "ndk;27.0.12077973" "cmake;3.22.1" "platforms;android-34" "build-tools;34.0.0"
+          for attempt in 1 2 3; do
+            "$SDKMANAGER" --install "ndk;27.0.12077973" "cmake;3.22.1" "platforms;android-34" "build-tools;34.0.0" && break
+            echo "Retry $attempt for sdkmanager..."
+            rm -rf "$ANDROID_HOME/.temp" || true
+            sleep 5
+          done
 
       - name: Provision Official Xyverse Technology Global Release Keystore
         env:
