@@ -406,28 +406,28 @@ class BootLogOverlayView(
     }
 
     private fun readLiveLogTail(maxLines: Int): List<String> {
-        val recent = VeloLogger.getRecentLines(maxLines * 2)
-        val fileLines = try {
-            val f = VeloLogger.getLatestLogFile()
+        return try {
+            val f = VeloLogger.latestLogFile
             if (f != null && f.exists()) {
-                f.readLines().takeLast(maxLines * 2)
+                f.readLines().filter { it.isNotBlank() }.takeLast(maxLines)
             } else {
-                emptyList()
+                VeloLogger.readLatestLogsTail(6000)
+                    .lines()
+                    .filter { it.isNotBlank() }
+                    .takeLast(maxLines)
             }
         } catch (_: Throwable) {
             emptyList()
         }
-
-        val combined = if (fileLines.isNotEmpty()) fileLines else recent
-        return combined.filter { it.isNotBlank() }.takeLast(maxLines)
     }
 
     private fun copyBootLogToClipboard() {
         try {
-            val content = VeloLogger.readFullLogText()
+            val content = VeloLogger.readLatestLogsTail(60000)
             val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             cm.setPrimaryClip(ClipData.newPlainText("Minecraft Boot Log", content))
-            copyFeedbackMessage = "Berhasil disalin ke Clipboard (${content.length} karakter) | File: ${VeloLogger.getLogDirectoryPath()}/latest.log"
+            val dirPath = VeloLogger.logDir?.absolutePath ?: "Android/media/id.xyverse.minecraft/log"
+            copyFeedbackMessage = "Berhasil disalin ke Clipboard (${content.length} karakter) | File: $dirPath/latest.log"
             copyFeedbackUntilMs = System.currentTimeMillis() + 3500L
             invalidate()
         } catch (t: Throwable) {

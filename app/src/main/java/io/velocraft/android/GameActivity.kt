@@ -318,7 +318,7 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
         val hw = JvmOptimizer.detectHardware(this)
         val effectiveRenderer = RendererProfileManager.resolveEffectiveBackend(this)
-        val resScale = JvmOptimizer.getResolutionScalePercent(this)
+        val resScale = JvmOptimizer.getResolutionScalePct(this)
         val summaryLine =
             "RAM Heap: ${hw.allocatedHeapMb} MB | Renderer: ${effectiveRenderer.displayName} | Skala: $resScale% | ABI: ${hw.abi}"
 
