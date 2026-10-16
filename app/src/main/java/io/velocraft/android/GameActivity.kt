@@ -338,6 +338,9 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
         Thread({
             try {
+                provisioner.prepareDirectoriesAndConfigs(
+                    includeFullMusicAssets = !ResumableDownloadEngine.isSkipMusicLiteEnabled(this)
+                )
                 val syncedShaders = RendererProfileManager.syncExternalShaderpacks(this, provisioner.gameDir)
                 VeloLogger.section(
                     "STAGE-1",

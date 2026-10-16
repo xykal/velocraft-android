@@ -13,8 +13,8 @@ android {
         applicationId = "id.xyverse.minecraft"
         minSdk = 24 // Android 7.0+ (Supports 32-bit armeabi-v7a & 64-bit arm64-v8a)
         targetSdk = 34
-        versionCode = 11
-        versionName = "0.7.3-release"
+        versionCode = 12
+        versionName = "0.7.4-release"
 
         externalNativeBuild {
             cmake {

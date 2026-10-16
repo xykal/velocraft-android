@@ -206,7 +206,11 @@ object JvmOptimizer {
             "java",
             "-Xms${initialHeapMb}M",
             "-Xmx${hw.allocatedHeapMb}M",
+            "-Xverify:none",
             "-XX:+UnlockExperimentalVMOptions",
+            "-XX:+UnlockDiagnosticVMOptions",
+            "-XX:-BytecodeVerificationLocal",
+            "-XX:-BytecodeVerificationRemote",
             "-XX:ActiveProcessorCount=${hw.totalCores}"
         )
 
@@ -251,6 +255,7 @@ object JvmOptimizer {
             listOf(
                 "-Dfile.encoding=UTF-8",
                 "-Djava.awt.headless=true",
+                "-Djava.security.egd=file:/dev/./urandom",
                 "-Dsun.java.launcher.diag=true",
                 "-Djava.home=${jreDir.absolutePath}",
                 "-Djava.io.tmpdir=${canonCacheDir.absolutePath}",
@@ -262,11 +267,14 @@ object JvmOptimizer {
                 "-Djna.boot.library.path=${canonNativesDir.absolutePath}",
                 "-Djava.library.path=${canonNativesDir.absolutePath}:${jreDir.absolutePath}/lib",
                 "-Dorg.lwjgl.librarypath=${canonNativesDir.absolutePath}",
+                "-Dorg.lwjgl.util.NoChecks=true",
                 "-Dorg.lwjgl.opengl.libname=${hw.recommendedRendererLib}",
                 "-Dorg.lwjgl.freetype.libname=${canonNativesDir.absolutePath}/libfreetype.so",
                 "-Dglfwstub.windowWidth=$winW",
                 "-Dglfwstub.windowHeight=$winH",
                 "-Dglfwstub.initEgl=false",
+                "-Dmixin.debug.verify=false",
+                "-Dmixin.checks=false",
                 "-Dlog4j2.formatMsgNoLookups=true",
                 "-Dfml.earlyprogresswindow=false",
                 "-Dloader.disable_forked_guis=true",

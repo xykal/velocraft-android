@@ -10,7 +10,6 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <sched.h>
-#include <setjmp.h>
 #include <signal.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -46,7 +45,6 @@ namespace {
 
 using namespace velocraft::input;
 
-// GLFW callback function pointers registered by org.lwjgl.glfw.GLFW
 using GLFW_invoke_Char_t        = void (*)(void* window, unsigned int codepoint);
 using GLFW_invoke_CharMods_t    = void (*)(void* window, unsigned int codepoint, int mods);
 using GLFW_invoke_CursorEnter_t = void (*)(void* window, int entered);
@@ -117,22 +115,27 @@ struct SharedEngineState {
 
     // Real-time Boot Progress & Mojang Splash / Minecraft Title Screen ETA Telemetry
     pthread_mutex_t telemetryMutex = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_t exitWaitMutex  = PTHREAD_MUTEX_INITIALIZER;
+    pthread_cond_t  exitWaitCond   = PTHREAD_COND_INITIALIZER;
+
     std::atomic<int64_t> bootStartTimeMs{0};
+    std::atomic<int64_t> jvmFinishedTimeMs{0};
     std::atomic<int64_t> lastProgressLogTimeMs{0};
-    std::atomic<int32_t> bootStageIndex{1};       // 1..10
-    std::atomic<int32_t> bootPercent{8};          // 0..100
+    std::atomic<int32_t> bootStageIndex{1};         // 1..10
+    std::atomic<int32_t> bootPercent{8};            // 0..100
     std::atomic<int32_t> loadedClassCount{0};
-    std::atomic<int32_t> targetSplashClasses{5400};
-    std::atomic<int32_t> targetMenuClasses{8200};
+    std::atomic<int32_t> targetSplashClasses{9800}; // True class count up to Mojang Splash
+    std::atomic<int32_t> targetMenuClasses{13200};  // True class count up to TitleScreen
     std::atomic<int32_t> classesPerSec{0};
     std::atomic<int32_t> jvmUsedRamMb{0};
     std::atomic<int32_t> jvmMaxRamMb{768};
-    std::atomic<int32_t> etaMojangSplashSec{IS_64BIT_ABI ? 22 : 42};
-    std::atomic<int32_t> etaMinecraftMenuSec{IS_64BIT_ABI ? 38 : 68};
+    std::atomic<int32_t> etaMojangSplashSec{IS_64BIT_ABI ? 24 : 42};
+    std::atomic<int32_t> etaMinecraftMenuSec{IS_64BIT_ABI ? 38 : 64};
     std::atomic<int32_t> swapBuffersCount{0};
     std::atomic<bool> mojangSplashReached{false};
     std::atomic<bool> titleScreenReached{false};
     std::atomic<bool> jvmRunning{false};
+    std::atomic<bool> jvmFinishedSignal{false};
     std::atomic<int32_t> interceptedExitCode{0};
 
     char stageTitle[256] = "TAHAP 1/10: Menyiapkan Lingkungan Engine & Direktori...";
@@ -141,8 +144,6 @@ struct SharedEngineState {
 };
 
 SharedEngineState* g_localStateCache = nullptr;
-pthread_t g_jvmMainThread{};
-sigjmp_buf g_jvmExitJmpBuf;
 
 SharedEngineState* getSharedState() {
     if (g_localStateCache != nullptr) {
@@ -188,6 +189,17 @@ void setTelemetryStrings(
     pthread_mutex_unlock(&st->telemetryMutex);
 }
 
+void signalJvmFinished(SharedEngineState* st, int exitCode) {
+    st->interceptedExitCode.store(exitCode, std::memory_order_release);
+    st->jvmRunning.store(false, std::memory_order_release);
+    st->jvmFinishedTimeMs.store(currentTimeMillis(), std::memory_order_release);
+
+    pthread_mutex_lock(&st->exitWaitMutex);
+    st->jvmFinishedSignal.store(true, std::memory_order_release);
+    pthread_cond_broadcast(&st->exitWaitCond);
+    pthread_mutex_unlock(&st->exitWaitMutex);
+}
+
 void appendNativeLineToLogFile(const char* prefix, const std::string& line) {
     LOGI("[%s] %s", prefix, line.c_str());
     SharedEngineState* st = getSharedState();
@@ -222,11 +234,9 @@ void emitBootProgressLogLine(SharedEngineState* st, bool forceEmit) {
     const bool splashDone = st->mojangSplashReached.load(std::memory_order_relaxed);
     const bool menuDone = st->titleScreenReached.load(std::memory_order_relaxed);
 
-    char stageBuf[256];
     char detailBuf[256];
     char classBuf[256];
     pthread_mutex_lock(&st->telemetryMutex);
-    std::snprintf(stageBuf, sizeof(stageBuf), "%s", st->stageTitle);
     std::snprintf(detailBuf, sizeof(detailBuf), "%s", st->subTaskDetail);
     std::snprintf(classBuf, sizeof(classBuf), "%s", st->activeClassName);
     pthread_mutex_unlock(&st->telemetryMutex);
@@ -272,39 +282,46 @@ void recalculateEtaAndProgress(SharedEngineState* st, int32_t newClasses) {
     const double elapsedSec = startMs > 0 ? std::max(0.5, (nowMs - startMs) / 1000.0) : 1.0;
 
     const double measuredRate = newClasses / elapsedSec;
-    const double baselineRate = IS_64BIT_ABI ? 260.0 : 135.0;
-    // Blend baseline rate early in boot, converging to measured rate after ~800 classes
-    const double weight = std::min(1.0, newClasses / 800.0);
-    const double effectiveRate = std::max(45.0, baselineRate * (1.0 - weight) + measuredRate * weight);
-    st->classesPerSec.store(static_cast<int32_t>( effectiveRate ), std::memory_order_relaxed);
+    const double baselineRate = IS_64BIT_ABI ? 320.0 : 210.0;
+    const double weight = std::min(1.0, newClasses / 1200.0);
+    const double effectiveRate = std::max(60.0, baselineRate * (1.0 - weight) + measuredRate * weight);
+    st->classesPerSec.store(static_cast<int32_t>(effectiveRate), std::memory_order_relaxed);
 
     const int32_t targetSplash = st->targetSplashClasses.load(std::memory_order_relaxed);
     const int32_t targetMenu = st->targetMenuClasses.load(std::memory_order_relaxed);
 
+    // If loadedClassCount approaches targetSplash without Splash yet, dynamically extend targetSplash
+    if (!st->mojangSplashReached.load(std::memory_order_relaxed) && newClasses > targetSplash - 300) {
+        st->targetSplashClasses.store(newClasses + 600, std::memory_order_relaxed);
+        st->targetMenuClasses.store(newClasses + 3200, std::memory_order_relaxed);
+    }
+
+    const int32_t adjSplash = st->targetSplashClasses.load(std::memory_order_relaxed);
+    const int32_t adjMenu = st->targetMenuClasses.load(std::memory_order_relaxed);
+
     if (st->mojangSplashReached.load(std::memory_order_relaxed)) {
         st->etaMojangSplashSec.store(0, std::memory_order_relaxed);
     } else {
-        const int32_t remSplash = std::max(60, targetSplash - newClasses);
-        const int32_t etaSplash = std::max(1, static_cast<int32_t>(std::ceil(remSplash / effectiveRate)));
+        const int32_t remSplash = std::max(120, adjSplash - newClasses);
+        const int32_t etaSplash = std::max(2, static_cast<int32_t>(std::ceil(remSplash / effectiveRate)));
         st->etaMojangSplashSec.store(etaSplash, std::memory_order_relaxed);
     }
 
     if (st->titleScreenReached.load(std::memory_order_relaxed)) {
         st->etaMinecraftMenuSec.store(0, std::memory_order_relaxed);
     } else {
-        const int32_t remMenu = std::max(120, targetMenu - newClasses);
-        const int32_t etaMenu = std::max(2, static_cast<int32_t>(std::ceil(remMenu / effectiveRate)));
+        const int32_t remMenu = std::max(240, adjMenu - newClasses);
+        const int32_t etaMenu = std::max(4, static_cast<int32_t>(std::ceil(remMenu / effectiveRate)));
         st->etaMinecraftMenuSec.store(etaMenu, std::memory_order_relaxed);
     }
 
     if (st->titleScreenReached.load(std::memory_order_relaxed)) {
         st->bootPercent.store(100, std::memory_order_relaxed);
     } else if (st->mojangSplashReached.load(std::memory_order_relaxed)) {
-        int32_t postSplashPct = 94 + ((newClasses - targetSplash) * 5) / std::max(1, targetMenu - targetSplash);
-        st->bootPercent.store( std::min(99, std::max(94, postSplashPct)), std::memory_order_relaxed );
+        int32_t postSplashPct = 94 + ((newClasses - adjSplash) * 5) / std::max(1, adjMenu - adjSplash);
+        st->bootPercent.store(std::min(99, std::max(94, postSplashPct)), std::memory_order_relaxed);
     } else {
-        // Map 0..targetSplash classes smoothly across 28%..92%
-        int32_t classPct = 28 + (newClasses * 64) / std::max(1, targetSplash);
+        int32_t classPct = 24 + (newClasses * 68) / std::max(1, adjSplash);
         int32_t curPct = st->bootPercent.load(std::memory_order_relaxed);
         int32_t nextPct = std::min(92, std::max(curPct, classPct));
         st->bootPercent.store(nextPct, std::memory_order_relaxed);
@@ -335,7 +352,6 @@ void onJvmClassLoaded(const std::string& rawClassName) {
         newDetail = "Menu Utama (TitleScreen) aktif — Seluruh registri, tekstur & audio siap!";
         isMilestoneClass = true;
     } else if (rawClassName.find("LoadingOverlay") != std::string::npos ||
-               rawClassName.find(" MojangStudios") != std::string::npos ||
                rawClassName.find("ReloadInstance") != std::string::npos) {
         st->mojangSplashReached.store(true, std::memory_order_relaxed);
         st->etaMojangSplashSec.store(0, std::memory_order_relaxed);
@@ -343,11 +359,10 @@ void onJvmClassLoaded(const std::string& rawClassName) {
         newStageTitle = "TAHAP 10/10: LAYAR SPLASH MOJANG STUDIOS TAMPIL DI LAYAR!";
         newDetail = "Splash Mojang Studios aktif — Memuat Atlas Tekstur, Font & Model 3D...";
         isMilestoneClass = true;
-    } else if (rawClassName.find("com.mojang.blaze3d") != std::string::npos ||
-               rawClassName.find("org.lwjgl.glfw") != std::string::npos ||
-               rawClassName.find("org.lwjgl.opengl") != std::string::npos ||
+    } else if (prevStage >= 7 && (
+               rawClassName.find("com.mojang.blaze3d") != std::string::npos ||
                rawClassName.find("net.coderbot.iris") != std::string::npos ||
-               rawClassName.find("me.jellysquid.mods.sodium") != std::string::npos) {
+               rawClassName.find("me.jellysquid.mods.sodium") != std::string::npos)) {
         if (prevStage < 9) {
             newStage = 9;
             newStageTitle = "TAHAP 9/10: Membuka Jendela GLFW & Konteks OpenGL ES (GL4ES 1.1.5)...";
@@ -356,8 +371,7 @@ void onJvmClassLoaded(const std::string& rawClassName) {
         }
     } else if (rawClassName.find("net.minecraft.client.Minecraft") != std::string::npos ||
                rawClassName.find("net.minecraft.client.main.Main") != std::string::npos ||
-               rawClassName.find("net.minecraft.client.Options") != std::string::npos ||
-               rawClassName.find("net.minecraft.client.sounds") != std::string::npos) {
+               rawClassName.find("net.minecraft.client.Options") != std::string::npos) {
         if (prevStage < 8) {
             newStage = 8;
             newStageTitle = "TAHAP 8/10: Menginisialisasi Klien Minecraft, Audio OpenAL & Manajer Aset...";
@@ -375,17 +389,17 @@ void onJvmClassLoaded(const std::string& rawClassName) {
             newDetail = "Mendaftarkan ribuan Blok, Item, Entitas, Bioma & skema DataFixer...";
             isMilestoneClass = true;
         }
-    } else if (rawClassName.find("org.spongepowered.asm.mixin") != std::string::npos ||
-               rawClassName.find("org.objectweb.asm") != std::string::npos) {
+    } else if (rawClassName.find("org.spongepowered.asm.mixin.transformer") != std::string::npos ||
+               rawClassName.find("org.spongepowered.asm.mixin.MixinEnvironment") != std::string::npos) {
         if (prevStage < 6) {
             newStage = 6;
             newStageTitle = "TAHAP 6/10: Mixin Engine — Menyuntikkan Optimasi Bytecode Mod...";
-            newDetail = "Menerapkan patch Mixin (Sodium, Lithium, FerriteCore, ImmediatelyFast, Iris)...";
+            newDetail = "Menerapkan patch Mixin (Sodium, Lithium, FerriteCore, ImmediatelyFast, ModernFix)...";
             isMilestoneClass = true;
         }
     } else if (rawClassName.find("net.fabricmc.loader.impl.discovery") != std::string::npos ||
                rawClassName.find("net.fabricmc.loader.impl.FabricLoaderImpl") != std::string::npos ||
-               rawClassName.find("net.fabricmc.loader.impl.metadata") != std::string::npos) {
+               rawClassName.find("net.fabricmc.loader.impl.lib.sat4j") != std::string::npos) {
         if (prevStage < 5) {
             newStage = 5;
             newStageTitle = "TAHAP 5/10: Fabric Loader 0.16.9 — Memindai 49 JAR & 9 Mod Optimasi...";
@@ -406,14 +420,13 @@ void onJvmClassLoaded(const std::string& rawClassName) {
         st->bootStageIndex.store(newStage, std::memory_order_relaxed);
     }
 
-    // Keep short readable class name for display
     std::string displayClass = rawClassName;
     if (displayClass.size() > 58) {
         displayClass = "..." + displayClass.substr(displayClass.size() - 55);
     }
     setTelemetryStrings(st, newStageTitle, newDetail, displayClass.c_str());
 
-    if (isMilestoneClass || (count % 180 == 0)) {
+    if (isMilestoneClass || (count % 220 == 0)) {
         emitBootProgressLogLine(st, isMilestoneClass);
     }
 }
@@ -475,11 +488,9 @@ int JNICALL jvmVfprintfHook(FILE* /*fp*/, const char* format, va_list args) {
     if (written <= 0) return written;
 
     std::string text(buf);
-    // Check if this is a HotSpot -Xlog:class+load=info:stdout:none line: "<ClassName> source: <url>"
     auto srcPos = text.find(" source: ");
     if (srcPos != std::string::npos) {
         std::string clsName = text.substr(0, srcPos);
-        // Trim leading whitespace/brackets if any
         auto lastBracket = clsName.find_last_of(']');
         if (lastBracket != std::string::npos && lastBracket + 1 < clsName.size()) {
             clsName = clsName.substr(lastBracket + 1);
@@ -493,7 +504,6 @@ int JNICALL jvmVfprintfHook(FILE* /*fp*/, const char* format, va_list args) {
         return written;
     }
 
-    // Trim trailing newline
     while (!text.empty() && (text.back() == '\n' || text.back() == '\r')) {
         text.pop_back();
     }
@@ -502,34 +512,6 @@ int JNICALL jvmVfprintfHook(FILE* /*fp*/, const char* format, va_list args) {
         appendNativeLineToLogFile("JVM-VM", text);
     }
     return written;
-}
-
-void JNICALL jvmExitHook(jint code) {
-    SharedEngineState* st = getSharedState();
-    st->interceptedExitCode.store(code, std::memory_order_release);
-    st->jvmRunning.store(false, std::memory_order_release);
-    appendNativeLineToLogFile(
-        "EXIT-HOOK",
-        "HotSpot VM memanggil exit(" + std::to_string(code) + ") — ditangani dengan aman tanpa menutup aplikasi."
-    );
-    if (pthread_equal(pthread_self(), g_jvmMainThread)) {
-        siglongjmp(g_jvmExitJmpBuf, (code == 0) ? 1000 : code);
-    }
-    pthread_exit(reinterpret_cast<void*>(static_cast<intptr_t>(code)));
-}
-
-void JNICALL jvmAbortHook() {
-    SharedEngineState* st = getSharedState();
-    st->interceptedExitCode.store(-6, std::memory_order_release);
-    st->jvmRunning.store(false, std::memory_order_release);
-    appendNativeLineToLogFile(
-        "ABORT-HOOK",
-        "HotSpot VM melaporkan kondisi abort() — periksa detail pesan JVM-VM di atas."
-    );
-    if (pthread_equal(pthread_self(), g_jvmMainThread)) {
-        siglongjmp(g_jvmExitJmpBuf, -6);
-    }
-    pthread_exit(reinterpret_cast<void*>(static_cast<intptr_t>(-6)));
 }
 
 void drainStdioPipeNonBlocking() {
@@ -561,6 +543,32 @@ void drainStdioPipeNonBlocking() {
         appendNativeLineToLogFile("JVM-OUT", lineBuffer);
     }
     fcntl(st->stdioPipe[0], F_SETFL, flags);
+}
+
+void JNICALL jvmExitHook(jint code) {
+    std::fflush(stdout);
+    std::fflush(stderr);
+    drainStdioPipeNonBlocking();
+    SharedEngineState* st = getSharedState();
+    appendNativeLineToLogFile(
+        "EXIT-HOOK",
+        "HotSpot VM memanggil exit(" + std::to_string(code) + ") — ditangani dengan aman tanpa menutup aplikasi."
+    );
+    signalJvmFinished(st, code == 0 ? 1000 : code);
+    pthread_exit(reinterpret_cast<void*>(static_cast<intptr_t>(code)));
+}
+
+void JNICALL jvmAbortHook() {
+    std::fflush(stdout);
+    std::fflush(stderr);
+    drainStdioPipeNonBlocking();
+    SharedEngineState* st = getSharedState();
+    appendNativeLineToLogFile(
+        "ABORT-HOOK",
+        "HotSpot VM melaporkan kondisi abort() — periksa detail pesan JVM-VM di atas."
+    );
+    signalJvmFinished(st, -6);
+    pthread_exit(reinterpret_cast<void*>(static_cast<intptr_t>(-6)));
 }
 
 void* stdioPipeReaderThread(void* /*arg*/) {
@@ -720,36 +728,12 @@ static jlong ndlopen_bugfix(JNIEnv* /*env*/, jclass /*cls*/, jlong filename_ptr,
     return reinterpret_cast<jlong>(handle);
 }
 
-void registerGlfwAndLwjglHooks(JNIEnv* vmEnv) {
+/**
+ * Registers ONLY `DynamicLinkLoader.ndlopen` right after `JNI_CreateJavaVM`
+ * WITHOUT loading `org.lwjgl.glfw.GLFW` prematurely!
+ */
+void registerLwjglDlopenHookOnly(JNIEnv* vmEnv) {
     if (!vmEnv) return;
-    SharedEngineState* st = getSharedState();
-
-    jclass glfwCls = vmEnv->FindClass("org/lwjgl/glfw/GLFW");
-    if (glfwCls) {
-        st->vmGlfwClass = reinterpret_cast<jclass>(vmEnv->NewGlobalRef(glfwCls));
-        st->methodInternalChangeMonitorSize = vmEnv->GetStaticMethodID(
-            st->vmGlfwClass, "internalChangeMonitorSize", "(II)V"
-        );
-        st->methodInternalWindowSizeChanged = vmEnv->GetStaticMethodID(
-            st->vmGlfwClass, "internalWindowSizeChanged", "(J)V"
-        );
-        jfieldID fKey = vmEnv->GetStaticFieldID(st->vmGlfwClass, "keyDownBuffer", "Ljava/nio/ByteBuffer;");
-        if (fKey) {
-            jobject keyBuf = vmEnv->GetStaticObjectField(st->vmGlfwClass, fKey);
-            if (keyBuf) {
-                st->glfwKeyDownBuffer = reinterpret_cast<jbyte*>(vmEnv->GetDirectBufferAddress(keyBuf));
-            }
-        }
-        jfieldID fMouse = vmEnv->GetStaticFieldID(st->vmGlfwClass, "mouseDownBuffer", "Ljava/nio/ByteBuffer;");
-        if (fMouse) {
-            jobject mouseBuf = vmEnv->GetStaticObjectField(st->vmGlfwClass, fMouse);
-            if (mouseBuf) {
-                st->glfwMouseDownBuffer = reinterpret_cast<jbyte*>(vmEnv->GetDirectBufferAddress(mouseBuf));
-            }
-        }
-    }
-    vmEnv->ExceptionClear();
-
     jclass dynLoader = vmEnv->FindClass("org/lwjgl/system/linux/DynamicLinkLoader");
     if (dynLoader) {
         JNINativeMethod m[] = {
@@ -758,6 +742,43 @@ void registerGlfwAndLwjglHooks(JNIEnv* vmEnv) {
         vmEnv->RegisterNatives(dynLoader, m, 1);
     }
     vmEnv->ExceptionClear();
+}
+
+/**
+ * Lazily binds `org.lwjgl.glfw.GLFW` buffers and monitor methods once GLFW is actually initialized by Minecraft.
+ */
+void bindGlfwBuffersAndMethods(JNIEnv* vmEnv) {
+    if (!vmEnv) return;
+    SharedEngineState* st = getSharedState();
+    registerLwjglDlopenHookOnly(vmEnv);
+
+    if (!st->vmGlfwClass) {
+        jclass glfwCls = vmEnv->FindClass("org/lwjgl/glfw/GLFW");
+        if (glfwCls) {
+            st->vmGlfwClass = reinterpret_cast<jclass>(vmEnv->NewGlobalRef(glfwCls));
+            st->methodInternalChangeMonitorSize = vmEnv->GetStaticMethodID(
+                st->vmGlfwClass, "internalChangeMonitorSize", "(II)V"
+            );
+            st->methodInternalWindowSizeChanged = vmEnv->GetStaticMethodID(
+                st->vmGlfwClass, "internalWindowSizeChanged", "(J)V"
+            );
+            jfieldID fKey = vmEnv->GetStaticFieldID(st->vmGlfwClass, "keyDownBuffer", "Ljava/nio/ByteBuffer;");
+            if (fKey) {
+                jobject keyBuf = vmEnv->GetStaticObjectField(st->vmGlfwClass, fKey);
+                if (keyBuf) {
+                    st->glfwKeyDownBuffer = reinterpret_cast<jbyte*>(vmEnv->GetDirectBufferAddress(keyBuf));
+                }
+            }
+            jfieldID fMouse = vmEnv->GetStaticFieldID(st->vmGlfwClass, "mouseDownBuffer", "Ljava/nio/ByteBuffer;");
+            if (fMouse) {
+                jobject mouseBuf = vmEnv->GetStaticObjectField(st->vmGlfwClass, fMouse);
+                if (mouseBuf) {
+                    st->glfwMouseDownBuffer = reinterpret_cast<jbyte*>(vmEnv->GetDirectBufferAddress(mouseBuf));
+                }
+            }
+        }
+        vmEnv->ExceptionClear();
+    }
 }
 
 void logJavaException(JNIEnv* env, const char* where) {
@@ -802,11 +823,6 @@ void logJavaException(JNIEnv* env, const char* where) {
     env->DeleteLocalRef(exc);
 }
 
-/**
- * Background 1.5-second Heartbeat Thread that samples live JVM Heap RAM usage
- * (`Runtime.getRuntime().totalMemory() - freeMemory()`) and emits periodic `[PROGRES-BOOT]`
- * telemetry lines even while a single Mixin or DataFixer class is computing intensively.
- */
 void* jvmHeartbeatMonitorThread(void* /*arg*/) {
     SharedEngineState* st = getSharedState();
     JavaVM* vm = st->runtimeJavaVM.load(std::memory_order_acquire);
@@ -831,7 +847,7 @@ void* jvmHeartbeatMonitorThread(void* /*arg*/) {
 
     while (st->jvmRunning.load(std::memory_order_acquire) &&
            !st->titleScreenReached.load(std::memory_order_relaxed)) {
-        usleep(1500 * 1000); // 1.5 seconds
+        usleep(1500 * 1000);
         if (!st->jvmRunning.load(std::memory_order_acquire)) break;
 
         if (runtimeObj && totalMemMid && freeMemMid && maxMemMid) {
@@ -860,13 +876,11 @@ struct DirectJvmLaunchContext {
     std::vector<std::string> vmOptionStrings;
     std::string mainClassName;
     std::vector<std::string> appArgs;
-    int exitCode = 0;
 };
 
 void* jvmDirectMainThread(void* rawCtx) {
     auto* ctx = reinterpret_cast<DirectJvmLaunchContext*>(rawCtx);
     SharedEngineState* st = getSharedState();
-    g_jvmMainThread = pthread_self();
 
     pinThreadToPerformanceCores();
     resetSignalsForHotSpot();
@@ -903,7 +917,7 @@ void* jvmDirectMainThread(void* rawCtx) {
     vmInitArgs.ignoreUnrecognized = JNI_TRUE;
 
     st->bootStageIndex.store(3, std::memory_order_relaxed);
-    st->bootPercent.store(26, std::memory_order_relaxed);
+    st->bootPercent.store(24, std::memory_order_relaxed);
     setTelemetryStrings(
         st,
         "TAHAP 3/10: Menginisialisasi Mesin Virtual OpenJDK 17 HotSpot (JNI_CreateJavaVM)...",
@@ -913,12 +927,6 @@ void* jvmDirectMainThread(void* rawCtx) {
     emitBootProgressLogLine(st, true);
 
     st->jvmRunning.store(true, std::memory_order_release);
-    int jmpVal = sigsetjmp(g_jvmExitJmpBuf, 1);
-    if (jmpVal != 0) {
-        ctx->exitCode = (jmpVal == 1000) ? 0 : jmpVal;
-        st->jvmRunning.store(false, std::memory_order_release);
-        return nullptr;
-    }
 
     const int64_t vmStartMs = currentTimeMillis();
     JavaVM* vm = nullptr;
@@ -931,8 +939,8 @@ void* jvmDirectMainThread(void* rawCtx) {
             "FATAL",
             "JNI_CreateJavaVM gagal dengan kode: " + std::to_string(createRes)
         );
-        ctx->exitCode = createRes != 0 ? createRes : -3;
-        st->jvmRunning.store(false, std::memory_order_release);
+        signalJvmFinished(st, createRes != 0 ? createRes : -3);
+        delete ctx;
         return nullptr;
     }
 
@@ -943,17 +951,16 @@ void* jvmDirectMainThread(void* rawCtx) {
             " ms! (Kelas dasar dimuat: " + std::to_string(st->loadedClassCount.load()) + " kelas)"
     );
 
-    // Register LWJGL3 / GLFW native bridges immediately on the newly created OpenJDK VM
-    registerGlfwAndLwjglHooks(vmEnv);
+    // Register ONLY DynamicLinkLoader.ndlopen without prematurely triggering GLFW.<clinit>!
+    registerLwjglDlopenHookOnly(vmEnv);
 
-    // Start background 1.5s JVM RAM & ETA heartbeat monitor thread
     pthread_t hbTid;
     if (pthread_create(&hbTid, nullptr, jvmHeartbeatMonitorThread, nullptr) == 0) {
         pthread_detach(hbTid);
     }
 
     st->bootStageIndex.store(4, std::memory_order_relaxed);
-    st->bootPercent.store(36, std::memory_order_relaxed);
+    st->bootPercent.store(32, std::memory_order_relaxed);
     setTelemetryStrings(
         st,
         "TAHAP 4/10: Memuat Kelas Utama Fabric Loader (KnotClient)...",
@@ -962,7 +969,6 @@ void* jvmDirectMainThread(void* rawCtx) {
     );
     emitBootProgressLogLine(st, true);
 
-    // Load main class via LauncherHelper.checkAndLoadMain (with fallback to FindClass)
     jclass mainCls = nullptr;
     jclass helperCls = vmEnv->FindClass("sun/launcher/LauncherHelper");
     if (helperCls != nullptr) {
@@ -996,16 +1002,16 @@ void* jvmDirectMainThread(void* rawCtx) {
 
     if (mainCls == nullptr) {
         appendNativeLineToLogFile("FATAL", "Tidak dapat menemukan kelas utama: " + ctx->mainClassName);
-        ctx->exitCode = -4;
-        st->jvmRunning.store(false, std::memory_order_release);
+        signalJvmFinished(st, -4);
+        delete ctx;
         return nullptr;
     }
 
     jmethodID mainMethod = vmEnv->GetStaticMethodID(mainCls, "main", "([Ljava/lang/String;)V");
     if (vmEnv->ExceptionCheck() || mainMethod == nullptr) {
         logJavaException(vmEnv, "GetStaticMethodID(main)");
-        ctx->exitCode = -5;
-        st->jvmRunning.store(false, std::memory_order_release);
+        signalJvmFinished(st, -5);
+        delete ctx;
         return nullptr;
     }
 
@@ -1029,15 +1035,15 @@ void* jvmDirectMainThread(void* rawCtx) {
 
     vmEnv->CallStaticVoidMethod(mainCls, mainMethod, mainArgsArray);
 
+    int exitCode = 0;
     if (vmEnv->ExceptionCheck()) {
         logJavaException(vmEnv, "KnotClient.main");
-        ctx->exitCode = 1;
-    } else {
-        ctx->exitCode = 0;
+        exitCode = 1;
     }
 
-    st->jvmRunning.store(false, std::memory_order_release);
+    signalJvmFinished(st, exitCode == 0 ? 1000 : exitCode);
     vm->DetachCurrentThread();
+    delete ctx;
     return nullptr;
 }
 
@@ -1060,7 +1066,7 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* /*reserved*/) {
         JNIEnv* vmEnv = nullptr;
         if (vm->GetEnv(reinterpret_cast<void**>(&vmEnv), JNI_VERSION_1_4) == JNI_OK && vmEnv) {
             appendNativeLineToLogFile("GLFW", "JNI_OnLoad dipanggil oleh OpenJDK HotSpot VM.");
-            registerGlfwAndLwjglHooks(vmEnv);
+            registerLwjglDlopenHookOnly(vmEnv);
         }
     }
     return JNI_VERSION_1_6;
@@ -1110,9 +1116,7 @@ int pojavInit() {
 
     JNIEnv* vmEnv = getAttachedRuntimeEnv();
     if (vmEnv) {
-        if (!st->vmGlfwClass) {
-            registerGlfwAndLwjglHooks(vmEnv);
-        }
+        bindGlfwBuffersAndMethods(vmEnv);
         if (st->vmGlfwClass && st->methodInternalChangeMonitorSize) {
             vmEnv->CallStaticVoidMethod(st->vmGlfwClass, st->methodInternalChangeMonitorSize, w, h);
             vmEnv->ExceptionClear();
@@ -1543,7 +1547,8 @@ Java_io_velocraft_android_bridge_NativeEngineBridge_nativeGetBootTelemetrySnapsh
     JNIEnv* env, jobject /*thiz*/
 ) {
     SharedEngineState* st = getSharedState();
-    const int64_t nowMs = currentTimeMillis();
+    const int64_t endMs = st->jvmFinishedTimeMs.load(std::memory_order_relaxed);
+    const int64_t nowMs = endMs > 0 ? endMs : currentTimeMillis();
     const int64_t startMs = st->bootStartTimeMs.load(std::memory_order_relaxed);
     const int elapsedSec = startMs > 0 ? static_cast<int>((nowMs - startMs) / 1000LL) : 0;
 
@@ -1614,7 +1619,12 @@ Java_io_velocraft_android_bridge_NativeEngineBridge_nativeConfigureRendererEnv(
     );
 
     st->bootStartTimeMs.store(currentTimeMillis(), std::memory_order_relaxed);
+    st->jvmFinishedTimeMs.store(0, std::memory_order_relaxed);
+    st->jvmFinishedSignal.store(false, std::memory_order_relaxed);
+    st->interceptedExitCode.store(0, std::memory_order_relaxed);
     st->loadedClassCount.store(0, std::memory_order_relaxed);
+    st->targetSplashClasses.store(9800, std::memory_order_relaxed);
+    st->targetMenuClasses.store(13200, std::memory_order_relaxed);
     st->bootStageIndex.store(1, std::memory_order_relaxed);
     st->bootPercent.store(12, std::memory_order_relaxed);
     st->mojangSplashReached.store(false, std::memory_order_relaxed);
@@ -1687,7 +1697,6 @@ Java_io_velocraft_android_bridge_NativeEngineBridge_nativeLaunchDirectJvm(
     );
     emitBootProgressLogLine(st, true);
 
-    // Remove duplicate lib/jli/libjli.so if lib/libjli.so exists
     std::string primaryJli = jreHomeStr + "/lib/libjli.so";
     std::string dupJli = jreHomeStr + "/lib/jli/libjli.so";
     if (access(primaryJli.c_str(), R_OK) == 0 && access(dupJli.c_str(), F_OK) == 0) {
@@ -1696,7 +1705,6 @@ Java_io_velocraft_android_bridge_NativeEngineBridge_nativeLaunchDirectJvm(
 
     void* libJvmHandle = nullptr;
 
-    // 1. Preload core OpenJDK shared libraries in strict dependency order
     if (!jreHomeStr.empty()) {
         const std::vector<std::string> orderedCoreLibs = {
             jreHomeStr + "/lib/libjli.so",
@@ -1730,7 +1738,6 @@ Java_io_velocraft_android_bridge_NativeEngineBridge_nativeLaunchDirectJvm(
             }
         }
 
-        // Load remaining .so libraries in <jreHome>/lib (skipping libjsig.so)
         std::string libDirStr = jreHomeStr + "/lib";
         DIR* dir = opendir(libDirStr.c_str());
         if (dir) {
@@ -1746,7 +1753,6 @@ Java_io_velocraft_android_bridge_NativeEngineBridge_nativeLaunchDirectJvm(
         }
     }
 
-    // 2. Preload Android LWJGL3 + OpenAL + Renderer + PojavExec bridge libraries from nativesDir
     if (!nativesStr.empty()) {
         const std::vector<std::string> nativeEngineLibs = {
             nativesStr + "/libfreetype.so",
@@ -1789,23 +1795,21 @@ Java_io_velocraft_android_bridge_NativeEngineBridge_nativeLaunchDirectJvm(
         return -2;
     }
 
-    // Probe contiguous virtual address space (critical on 32-bit armeabi-v7a)
     const int32_t maxContigMb = probeMaxContiguousMmapMb();
     appendNativeLineToLogFile(
         "MEM-PROBE",
         "Blok ruang alamat virtual kontigu maksimum yang tersedia: " + std::to_string(maxContigMb) + " MB"
     );
 
-    DirectJvmLaunchContext launchCtx{};
-    launchCtx.createJavaVM = createJavaVM;
-    // Enable live classload stream without decorations for real-time stage & ETA calculation
-    launchCtx.vmOptionStrings.push_back("-Xlog:class+load=info:stdout:none");
-    launchCtx.vmOptionStrings.push_back("-Dsun.java.launcher=SUN_STANDARD");
+    auto* launchCtx = new DirectJvmLaunchContext();
+    launchCtx->createJavaVM = createJavaVM;
+    launchCtx->vmOptionStrings.push_back("-Xlog:class+load=info:stdout:none");
+    launchCtx->vmOptionStrings.push_back("-Dsun.java.launcher=SUN_STANDARD");
 #if !IS_64BIT_ABI
-    launchCtx.vmOptionStrings.push_back("-XX:ReservedCodeCacheSize=64M");
-    launchCtx.vmOptionStrings.push_back("-XX:InitialCodeCacheSize=16M");
+    launchCtx->vmOptionStrings.push_back("-XX:ReservedCodeCacheSize=64M");
+    launchCtx->vmOptionStrings.push_back("-XX:InitialCodeCacheSize=16M");
 #else
-    launchCtx.vmOptionStrings.push_back("-XX:ReservedCodeCacheSize=128M");
+    launchCtx->vmOptionStrings.push_back("-XX:ReservedCodeCacheSize=128M");
 #endif
 
     const jsize argc = env->GetArrayLength(jvmArgsArray);
@@ -1827,64 +1831,66 @@ Java_io_velocraft_android_bridge_NativeEngineBridge_nativeLaunchDirectJvm(
         }
         if (!foundMainClass) {
             if ((arg == "-cp" || arg == "-classpath") && (i + 1 < rawArgs.size())) {
-                launchCtx.vmOptionStrings.push_back("-Djava.class.path=" + rawArgs[++i]);
+                launchCtx->vmOptionStrings.push_back("-Djava.class.path=" + rawArgs[++i]);
             } else if (!arg.empty() && arg[0] == '-') {
-                // On 32-bit armeabi-v7a, ensure -Xmx fits safely inside contiguous virtual memory
                 if (!IS_64BIT_ABI && arg.rfind("-Xmx", 0) == 0) {
                     int requestedMb = std::atoi(arg.c_str() + 4);
                     int safeLimitMb = std::max(384, maxContigMb - 220);
                     int finalMaxMb = std::min(requestedMb, safeLimitMb);
                     st->jvmMaxRamMb.store(finalMaxMb, std::memory_order_relaxed);
-                    launchCtx.vmOptionStrings.push_back("-Xmx" + std::to_string(finalMaxMb) + "M");
+                    launchCtx->vmOptionStrings.push_back("-Xmx" + std::to_string(finalMaxMb) + "M");
                 } else if (!IS_64BIT_ABI && arg.rfind("-Xms", 0) == 0) {
                     int requestedInitMb = std::atoi(arg.c_str() + 4);
                     int safeInitMb = std::min(requestedInitMb, 256);
                     st->jvmUsedRamMb.store(safeInitMb / 2, std::memory_order_relaxed);
-                    launchCtx.vmOptionStrings.push_back("-Xms" + std::to_string(safeInitMb) + "M");
+                    launchCtx->vmOptionStrings.push_back("-Xms" + std::to_string(safeInitMb) + "M");
                 } else {
                     if (arg.rfind("-Xmx", 0) == 0) {
                         st->jvmMaxRamMb.store(std::atoi(arg.c_str() + 4), std::memory_order_relaxed);
                     }
-                    launchCtx.vmOptionStrings.push_back(arg);
+                    launchCtx->vmOptionStrings.push_back(arg);
                 }
             } else {
                 foundMainClass = true;
-                launchCtx.mainClassName = arg;
+                launchCtx->mainClassName = arg;
             }
         } else {
-            launchCtx.appArgs.push_back(arg);
+            launchCtx->appArgs.push_back(arg);
         }
     }
 
-    if (launchCtx.mainClassName.empty()) {
-        launchCtx.mainClassName = "net.fabricmc.loader.impl.launch.knot.KnotClient";
+    if (launchCtx->mainClassName.empty()) {
+        launchCtx->mainClassName = "net.fabricmc.loader.impl.launch.knot.KnotClient";
     }
 
-    std::string sunCmd = launchCtx.mainClassName;
-    for (const auto& a : launchCtx.appArgs) {
+    std::string sunCmd = launchCtx->mainClassName;
+    for (const auto& a : launchCtx->appArgs) {
         sunCmd += " " + a;
     }
-    launchCtx.vmOptionStrings.push_back("-Dsun.java.command=" + sunCmd);
+    launchCtx->vmOptionStrings.push_back("-Dsun.java.command=" + sunCmd);
 
     appendNativeLineToLogFile(
         "BOOT",
         "Meluncurkan OpenJDK 17 HotSpot (" + std::string(VELOCRAFT_ABI_NAME) + ") -> " +
-            launchCtx.mainClassName + " (Opsi VM: " + std::to_string(launchCtx.vmOptionStrings.size()) +
-            ", Argumen Game: " + std::to_string(launchCtx.appArgs.size()) + ")"
+            launchCtx->mainClassName + " (Opsi VM: " + std::to_string(launchCtx->vmOptionStrings.size()) +
+            ", Argumen Game: " + std::to_string(launchCtx->appArgs.size()) + ")"
     );
 
     pthread_attr_t attr;
     pthread_attr_init(&attr);
-    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
     pthread_attr_setstacksize(&attr, 4 * 1024 * 1024);
     pthread_attr_setguardsize(&attr, 0);
 
     pthread_t jvmTid;
-    if (pthread_create(&jvmTid, &attr, jvmDirectMainThread, &launchCtx) == 0) {
-        void* joinRes = nullptr;
-        pthread_join(jvmTid, &joinRes);
+    if (pthread_create(&jvmTid, &attr, jvmDirectMainThread, launchCtx) == 0) {
+        pthread_mutex_lock(&st->exitWaitMutex);
+        while (!st->jvmFinishedSignal.load(std::memory_order_acquire)) {
+            pthread_cond_wait(&st->exitWaitCond, &st->exitWaitMutex);
+        }
+        pthread_mutex_unlock(&st->exitWaitMutex);
     } else {
-        jvmDirectMainThread(&launchCtx);
+        jvmDirectMainThread(launchCtx);
     }
     pthread_attr_destroy(&attr);
 
@@ -1892,11 +1898,8 @@ Java_io_velocraft_android_bridge_NativeEngineBridge_nativeLaunchDirectJvm(
     std::fflush(stderr);
     drainStdioPipeNonBlocking();
 
-    int exitCode = launchCtx.exitCode;
-    int intercepted = st->interceptedExitCode.load(std::memory_order_acquire);
-    if (exitCode == 0 && intercepted != 0) {
-        exitCode = intercepted;
-    }
+    int rawCode = st->interceptedExitCode.load(std::memory_order_acquire);
+    int exitCode = (rawCode == 1000) ? 0 : rawCode;
 
     appendNativeLineToLogFile("EXIT", "Sesi OpenJDK HotSpot selesai dengan kode keluar: " + std::to_string(exitCode));
     return exitCode;
