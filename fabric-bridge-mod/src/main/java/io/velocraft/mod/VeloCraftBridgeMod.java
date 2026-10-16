@@ -120,6 +120,18 @@ public final class VeloCraftBridgeMod implements PreLaunchEntrypoint, ClientModI
         sendTelemetryTick(MODE_GUI_CURSOR, 120, 20.0f, 0, "velocraft:bridge_active");
     }
 
+    public static void sendTelemetryState(
+        byte uiMode,
+        int hotbarSlot,
+        int currentFps,
+        int pingMs,
+        boolean sprinting,
+        boolean sneaking,
+        String screenName
+    ) {
+        sendTelemetryTick(uiMode, currentFps, 20.0f, hotbarSlot, screenName);
+    }
+
     public static void sendTelemetryTick(
         byte uiMode,
         int fps,
