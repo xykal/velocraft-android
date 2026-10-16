@@ -1,7 +1,6 @@
 package io.velocraft.mod;
 
 import net.fabricmc.api.ClientModInitializer;
-import net.minecraft.client.MinecraftClient;
 
 import java.io.FileDescriptor;
 import java.io.FileOutputStream;
@@ -9,31 +8,39 @@ import java.io.PrintStream;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 
 /**
- * VeloCraft Native Bridge Mod (Fabric 1.20.4).
+ * Client-side Fabric Companion Mod for VeloCraft Android (Minecraft 1.20.4).
  *
  * 1. Pre-verifies LWJGL 3 MemoryUtil (StdlibAllocator) and Blaze3D RenderSystem on the Render thread
  *    with unbuffered FileDescriptor.out logging so no initialization error can ever be masked by
  *    Minecraft.fillReport's secondary NoClassDefFoundError.
- * 2. Broadcasts real-time client state over localhost UDP to the Android NDK HUD layer.
+ * 2. Broadcasts lightweight UDP telemetry packets to 127.0.0.1:28465.
  */
-public class VeloCraftBridgeMod implements ClientModInitializer {
+public final class VeloCraftBridgeMod implements ClientModInitializer {
 
-    private static final int DEFAULT_UDP_PORT = Integer.getInteger("velocraft.bridge.port", 28465);
+    public static final short MAGIC_HEADER = 0x5643; // "VC"
+    public static final byte MODE_IN_GAME_CROSSHAIR = 0;
+    public static final byte MODE_GUI_CURSOR        = 1;
+    public static final byte MODE_CHAT_INPUT        = 2;
+
     private static final PrintStream RAW_OUT = new PrintStream(new FileOutputStream(FileDescriptor.out), true);
-    private final ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor(r -> {
-        Thread t = new Thread(r, "VeloCraft-State-Broadcaster");
-        t.setDaemon(true);
-        return t;
-    });
+    private static DatagramSocket udpSocket;
+    private static InetAddress loopbackAddr;
+    private static int bridgePort = 28465;
 
-    private DatagramSocket socket;
-    private InetAddress loopback;
+    static {
+        try {
+            String portProp = System.getProperty("velocraft.bridge.port", "28465");
+            bridgePort = Integer.parseInt(portProp);
+            loopbackAddr = InetAddress.getByName("127.0.0.1");
+            udpSocket = new DatagramSocket();
+        } catch (Exception ignored) {
+        }
+    }
 
     public static void logRaw(String msg) {
         RAW_OUT.println("[VeloCraft-Bridge] " + msg);
@@ -49,7 +56,7 @@ public class VeloCraftBridgeMod implements ClientModInitializer {
                 logRaw("Caused by [" + depth + "]: " + cur);
             }
             StackTraceElement[] trace = cur.getStackTrace();
-            int limit = Math.min(trace.length, 24);
+            int limit = Math.min(trace.length, 28);
             for (int i = 0; i < limit; i++) {
                 logRaw("  at " + trace[i]);
             }
@@ -81,6 +88,7 @@ public class VeloCraftBridgeMod implements ClientModInitializer {
                 System.getProperty("org.lwjgl.system.allocator") + ") di thread: " +
                 Thread.currentThread().getName());
             Class.forName("org.lwjgl.system.MemoryUtil", true, cl);
+            Class.forName("org.lwjgl.system.MemoryUtil$LazyInit", true, cl);
             Class.forName("org.lwjgl.system.MemoryStack", true, cl);
             logRaw("LWJGL 3 MemoryUtil & MemoryStack siap.");
         } catch (Throwable t) {
@@ -94,36 +102,44 @@ public class VeloCraftBridgeMod implements ClientModInitializer {
         } catch (Throwable t) {
             logThrowableChain("RenderSystem.<clinit>", t);
         }
-
-        try {
-            socket = new DatagramSocket();
-            loopback = InetAddress.getLoopbackAddress();
-            executor.scheduleAtFixedRate(this::broadcastClientState, 100, 50, TimeUnit.MILLISECONDS);
-        } catch (Exception e) {
-            logRaw("Gagal menginisialisasi soket UDP telemetry: " + e.getMessage());
-        }
     }
 
-    private void broadcastClientState() {
+    public static void sendTelemetryState(
+            byte screenMode,
+            int activeHotbarSlot,
+            int clientFps,
+            int pingMs,
+            boolean isSprinting,
+            boolean isSneaking,
+            String screenSimpleName
+    ) {
+        if (udpSocket == null || loopbackAddr == null) return;
+
         try {
-            MinecraftClient client = MinecraftClient.getInstance();
-            if (client == null) return;
+            byte[] nameBytes = screenSimpleName != null
+                    ? screenSimpleName.getBytes(StandardCharsets.UTF_8)
+                    : new byte[0];
+            int nameLen = Math.min(nameBytes.length, 64);
 
-            boolean inWorld = client.world != null && client.player != null;
-            boolean screenOpen = client.currentScreen != null;
-            boolean cursorGrabbed = client.mouse != null && client.mouse.isCursorLocked();
-            int fps = client.getCurrentFps();
-            float health = inWorld && client.player != null ? client.player.getHealth() : 20.0f;
-            int selectedSlot = inWorld && client.player != null ? client.player.getInventory().selectedSlot : 0;
+            ByteBuffer buf = ByteBuffer.allocate(10 + nameLen).order(ByteOrder.BIG_ENDIAN);
+            buf.putShort(MAGIC_HEADER);
+            buf.put(screenMode);
+            buf.put((byte) (activeHotbarSlot & 0xFF));
+            buf.putShort((short) (clientFps & 0xFFFF));
+            buf.putShort((short) (pingMs & 0xFFFF));
 
-            String payload = String.format(
-                "{\"inWorld\":%b,\"screenOpen\":%b,\"cursorGrabbed\":%b,\"fps\":%d,\"health\":%.1f,\"slot\":%d}",
-                inWorld, screenOpen, cursorGrabbed, fps, health, selectedSlot
-            );
+            byte flags = 0;
+            if (isSprinting) flags |= 0x01;
+            if (isSneaking)  flags |= 0x02;
+            buf.put(flags);
+            buf.put((byte) nameLen);
+            if (nameLen > 0) {
+                buf.put(nameBytes, 0, nameLen);
+            }
 
-            byte[] data = payload.getBytes(StandardCharsets.UTF_8);
-            DatagramPacket packet = new DatagramPacket(data, data.length, loopback, DEFAULT_UDP_PORT);
-            socket.send(packet);
+            byte[] payload = buf.array();
+            DatagramPacket packet = new DatagramPacket(payload, payload.length, loopbackAddr, bridgePort);
+            udpSocket.send(packet);
         } catch (Exception ignored) {
         }
     }
