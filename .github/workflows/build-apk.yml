@@ -120,14 +120,14 @@ jobs:
         run: |
           gradle :app:assembleRelease --no-daemon
           mkdir -p dist-apks
-          cp app/build/outputs/apk/release/app-arm64-v8a-release.apk dist-apks/Minecraft-Xyverse-v0.7.6-arm64-v8a-official-signed.apk
-          cp app/build/outputs/apk/release/app-armeabi-v7a-release.apk dist-apks/Minecraft-Xyverse-v0.7.6-armeabi-v7a-official-signed.apk
-          cp app/build/outputs/apk/release/app-universal-release.apk dist-apks/Minecraft-Xyverse-v0.7.6-universal-official-signed.apk
+          cp app/build/outputs/apk/release/app-arm64-v8a-release.apk dist-apks/Minecraft-Xyverse-v0.7.7-arm64-v8a-official-signed.apk
+          cp app/build/outputs/apk/release/app-armeabi-v7a-release.apk dist-apks/Minecraft-Xyverse-v0.7.7-armeabi-v7a-official-signed.apk
+          cp app/build/outputs/apk/release/app-universal-release.apk dist-apks/Minecraft-Xyverse-v0.7.7-universal-official-signed.apk
           cp app/keystore/xyverse-official-release.p12 dist-apks/xyverse-official-release.p12
 
           # Verify Official v1/v2/v3 APK Signature & Certificate Subject
           APKSIGNER="$ANDROID_HOME/build-tools/34.0.0/apksigner"
-          "$APKSIGNER" verify --verbose --print-certs dist-apks/Minecraft-Xyverse-v0.7.6-arm64-v8a-official-signed.apk
+          "$APKSIGNER" verify --verbose --print-certs dist-apks/Minecraft-Xyverse-v0.7.7-arm64-v8a-official-signed.apk
 
           # Fetch Real Android OpenJDK 17 HotSpot Runtimes (libjli.so + libjvm.so + modules) for Release Mirror
           curl -fL "https://github.com/PojavLauncherTeam/android-openjdk-build-multiarch/releases/download/jre17-ec28559/jre17-arm64-20210825-release.tar.xz" \
@@ -139,7 +139,7 @@ jobs:
       - name: Upload Official Signed Release APK & OpenJDK Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Minecraft-Xyverse-Official-Signed-v0.7.6-release
+          name: Minecraft-Xyverse-Official-Signed-v0.7.7-release
           path: |
             dist-apks/*.apk
             dist-apks/*.tar.xz
@@ -150,34 +150,40 @@ jobs:
         if: ${{ github.event_name == 'push' || inputs.create_draft_release == true }}
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.release_tag || 'v0.7.6-release' }}
-          name: "Minecraft (Official Signed Release ${{ inputs.release_tag || 'v0.7.6-release' }} - id.xyverse.minecraft) [DRAFT]"
+          tag_name: ${{ inputs.release_tag || 'v0.7.7-release' }}
+          name: "Minecraft (Official Signed Release ${{ inputs.release_tag || 'v0.7.7-release' }} - id.xyverse.minecraft) [DRAFT]"
           draft: true
           prerelease: false
           generate_release_notes: true
           body: |
-            ### Minecraft - Java Porting Edition (`v0.7.6-release` Official Signed) [DRAFT]
+            ### Minecraft - Java Porting Edition (`v0.7.7-release` Official Signed) [DRAFT]
             - **Package ID Resmi:** **`id.xyverse.minecraft`**
             - **Sertifikat Keystore Produksi (v1 + v2 + v3 Signed):**
               - **SHA-256 Fingerprint:** `F2:BF:14:62:F1:F8:02:BA:3D:6A:29:78:B3:11:D4:5F:39:13:81:21:13:24:4B:A4:90:D9:AF:7A:43:D7:22:61`
 
-            #### Pembaruan Utama di `v0.7.6-release`:
-            1. **Perbaikan Tuntas Crash Tahap 10 (96%) `RenderSystem.<clinit>()` (`UnsatisfiedLinkError: Native Library liblwjgl.so already loaded in another classloader`):**
-               - Menghapus pemanggilan dini `vmEnv->FindClass("org/lwjgl/...")` di `jvmDirectMainThread` (`t = 1s`) yang sebelumnya memuat `org.lwjgl.system.Library` dan `liblwjgl.so` di dalam **`AppClassLoader`** sebelum Fabric Loader (`KnotClient`) berjalan, sehingga saat `RenderSystem.<clinit>()` berjalan di dalam **`KnotClassLoader`** (`t = 85s`), OpenJDK 17 melempar `UnsatisfiedLinkError: Native Library .../liblwjgl.so already loaded in another classloader`.
-               - Memindahkan inisialisasi LWJGL 3 (`DynamicLinkLoader`, `Library`, `MemoryUtil`, `StdlibAllocator`, dan `GLFW`) sepenuhnya ke dalam **`KnotClassLoader`** melalui entrypoint `"preLaunch"` (`VeloCraftBridgeMod.onPreLaunch()`) dan `JNI_OnLoad` (`bindGlfwBuffersAndMethods`).
-            2. **Penghapusan Crosshair Bulat Tengah & Penyempurnaan UI/HUD:**
-               - Menghapus crosshair bulat di tengah `ProHudOverlayView` saat bermain karena Minecraft sudah memiliki crosshair `+` bawaan.
-               - Menyempurnakan tampilan tombol HUD (double-ring matte surface + auto-fit label), bilah telemetri atas, hotbar 9-slot, indikator 10-tahap pada `BootLogOverlayView`, dan kartu status pada `MainMenuView`.
+            #### Pembaruan Utama di `v0.7.7-release`:
+            1. **Bundel Mod Menu 9.2.0 In-Game (`modmenu-9.2.0.jar`):**
+               - Menyertakan langsung **Mod Menu 9.2.0** (TerraformersMC) untuk Minecraft 1.20.4 Fabric di dalam APK (`assets/mods/modmenu-9.2.0.jar`), sehingga tombol **`Mods`** langsung muncul di Menu Utama dan Menu Pause Minecraft tanpa perlu mengunduh ulang data.
+            2. **Perbaikan Total Kursor & Klik Menu + 3 Gaya Kursor Studio:**
+               - Menyinkronkan ukuran jendela Minecraft (`GLFW.internalChangeMonitorSize` + `GLFW.internalWindowSizeChanged` + `cbCursorEnter`) di `pojavPumpEvents` agar koordinat sentuhan HP presisi 1:1 dengan `Window.getScreenWidth()/Height()` (memperbaiki bug ukuran default `854x480` yang membuat klik meleset ke luar layar).
+               - Mengaktifkan kursor secara otomatis saat berada di Menu/Inventori (`!NativeEngineBridge.isCursorGrabbed()`) serta mendukung **Mode Sentuh Langsung + Geser Presisi** (ketuk tombol menu langsung klik + tahan 45ms lintas frame).
+               - Menghadirkan 3 pilihan gaya kursor baru (`PANAH TAKTIS STUDIO`, `RETIKEL PRESISI`, `INTAN LANCIP`) lengkap dengan animasi ripple saat klik.
+            3. **Penghapusan Bar Hijau Penutup Statistik FPS & Pembersihan Kata "Pojav":**
+               - Menghapus bar hijau atas (`drawMinimizedTopPill`) saat log ditutup sehingga bar telemetri FPS/CPS/Renderer di atas layar tidak lagi tertutup.
+               - Membersihkan seluruh teks/log dari kata `"pojav"` / `"Pojav"`.
+            4. **Studio Custom HUD & Keybind Lengkap:**
+               - Menambahkan Dock Editor Visual 10-Alat langsung di atas layar (`+ TAMBAH`, `DUPLIKAT`, `BENTUK: BULAT/KOTAK/KAPSUL`, `SNAP GRID`, `KEY & LABEL`, `UKURAN -/+`, `OPASITAS -/+`, `HAPUS`, `SIMPAN HUD`).
+               - Memperluas Studio Custom HUD dengan 4 kategori aksi (`Keyboard Utama`, `F1-F12 & Navigasi`, `Mouse, Scroll & Hotbar 1-9`, serta `Makro PvP & Pintasan F3+B/G/A`) dan 6 warna aksen studio.
 
             #### Pilihan File APK Resmi (`id.xyverse.minecraft`):
-            - **`Minecraft-Xyverse-v0.7.6-arm64-v8a-official-signed.apk`** *(Khusus HP 64-bit)*
-            - **`Minecraft-Xyverse-v0.7.6-armeabi-v7a-official-signed.apk`** *(Khusus HP 32-bit)*
-            - **`Minecraft-Xyverse-v0.7.6-universal-official-signed.apk`** *(Universal semua HP Android)*
+            - **`Minecraft-Xyverse-v0.7.7-arm64-v8a-official-signed.apk`** *(Khusus HP 64-bit)*
+            - **`Minecraft-Xyverse-v0.7.7-armeabi-v7a-official-signed.apk`** *(Khusus HP 32-bit)*
+            - **`Minecraft-Xyverse-v0.7.7-universal-official-signed.apk`** *(Universal semua HP Android)*
             - **`jre-arm64-v8a-openjdk.tar.xz`** & **`jre-armeabi-v7a-openjdk.tar.xz`** *(Arsip Real OpenJDK HotSpot Android)*
           files: |
-            dist-apks/Minecraft-Xyverse-v0.7.6-arm64-v8a-official-signed.apk
-            dist-apks/Minecraft-Xyverse-v0.7.6-armeabi-v7a-official-signed.apk
-            dist-apks/Minecraft-Xyverse-v0.7.6-universal-official-signed.apk
+            dist-apks/Minecraft-Xyverse-v0.7.7-arm64-v8a-official-signed.apk
+            dist-apks/Minecraft-Xyverse-v0.7.7-armeabi-v7a-official-signed.apk
+            dist-apks/Minecraft-Xyverse-v0.7.7-universal-official-signed.apk
             dist-apks/jre-arm64-v8a-openjdk.tar.xz
             dist-apks/jre-armeabi-v7a-openjdk.tar.xz
             dist-apks/xyverse-official-release.p12
