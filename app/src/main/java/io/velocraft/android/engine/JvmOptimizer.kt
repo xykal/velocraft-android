@@ -190,19 +190,30 @@ object JvmOptimizer {
         accessToken: String = "0"
     ): Array<String> {
         val hw = detectHardware(context)
-        val initialHeapMb = (hw.allocatedHeapMb / 2).coerceAtLeast(512)
+        val initialHeapMb = (hw.allocatedHeapMb / 2).coerceAtLeast(384)
+        val jreDir = File(gameDir.parentFile, "jre21-${hw.abi}").canonicalFile
+        val canonGameDir = gameDir.canonicalFile
+        val canonAssetsDir = assetsDir.canonicalFile
+        val canonNativesDir = nativesDir.canonicalFile
+        val canonCacheDir = context.cacheDir.canonicalFile
+
+        val dm = context.resources.displayMetrics
+        val scaleFactor = hw.resolutionScalePct / 100.0f
+        val winW = ((dm.widthPixels * scaleFactor).toInt()).coerceAtLeast(640)
+        val winH = ((dm.heightPixels * scaleFactor).toInt()).coerceAtLeast(360)
+
         val args = mutableListOf(
             "java",
             "-Xms${initialHeapMb}M",
             "-Xmx${hw.allocatedHeapMb}M",
-            "-XX:+UnlockExperimentalVMOptions"
+            "-XX:+UnlockExperimentalVMOptions",
+            "-XX:ActiveProcessorCount=${hw.totalCores}"
         )
 
         if (hw.useGenerationalZgc && hw.is64Bit) {
             args.addAll(
                 listOf(
                     "-XX:+UseZGC",
-                    "-XX:+ZGenerational",
                     "-XX:+DisableExplicitGC"
                 )
             )
@@ -219,37 +230,47 @@ object JvmOptimizer {
             )
         }
 
-        args.addAll(
-            listOf(
-                "-Dfile.encoding=UTF-8",
-                "-Djava.awt.headless=true"
-            )
-        )
-
         if (hw.is64Bit) {
             args.addAll(
                 listOf(
                     "-XX:G1HeapRegionSize=16M",
                     "-XX:+AlwaysPreTouch",
-                    "-XX:+UseStringDeduplication",
-                    "-XX:+UseNeon",
-                    "-XX:+UseCRC32Intrinsics"
+                    "-XX:+UseStringDeduplication"
                 )
             )
         } else {
             args.addAll(
                 listOf(
                     "-XX:G1HeapRegionSize=4M",
-                    "-Xss512k"
+                    "-Xss768k"
                 )
             )
         }
 
         args.addAll(
             listOf(
-                "-Djava.library.path=${nativesDir.absolutePath}",
-                "-Dorg.lwjgl.librarypath=${nativesDir.absolutePath}",
+                "-Dfile.encoding=UTF-8",
+                "-Djava.awt.headless=true",
+                "-Dsun.java.launcher.diag=true",
+                "-Djava.home=${jreDir.absolutePath}",
+                "-Djava.io.tmpdir=${canonCacheDir.absolutePath}",
+                "-Duser.home=${canonGameDir.absolutePath}",
+                "-Duser.dir=${canonGameDir.absolutePath}",
+                "-Dos.name=Linux",
+                "-Dos.version=Android-${Build.VERSION.RELEASE}",
+                "-Duser.language=en",
+                "-Djna.boot.library.path=${canonNativesDir.absolutePath}",
+                "-Djava.library.path=${canonNativesDir.absolutePath}:${jreDir.absolutePath}/lib",
+                "-Dorg.lwjgl.librarypath=${canonNativesDir.absolutePath}",
                 "-Dorg.lwjgl.opengl.libname=${hw.recommendedRendererLib}",
+                "-Dorg.lwjgl.freetype.libname=${canonNativesDir.absolutePath}/libfreetype.so",
+                "-Dglfwstub.windowWidth=$winW",
+                "-Dglfwstub.windowHeight=$winH",
+                "-Dglfwstub.initEgl=false",
+                "-Dlog4j2.formatMsgNoLookups=true",
+                "-Dfml.earlyprogresswindow=false",
+                "-Dloader.disable_forked_guis=true",
+                "-Djdk.lang.Process.launchMechanism=FORK",
                 "-Dvelocraft.bridge.port=28465",
                 "-Dvelocraft.abi=${hw.abi}",
                 "-Dvelocraft.chunkThreads=${hw.chunkBuilderThreads}",
@@ -258,14 +279,14 @@ object JvmOptimizer {
                 classpath,
                 "net.fabricmc.loader.impl.launch.knot.KnotClient",
                 "--username", playerUsername,
-                "--version", "1.20.4-Xyverse",
-                "--gameDir", gameDir.absolutePath,
-                "--assetsDir", assetsDir.absolutePath,
+                "--version", "1.20.4",
+                "--gameDir", canonGameDir.absolutePath,
+                "--assetsDir", canonAssetsDir.absolutePath,
                 "--assetIndex", "12",
                 "--uuid", playerUuid,
                 "--accessToken", accessToken,
                 "--userType", "msa",
-                "--versionType", "Xyverse-Official-${hw.abi}"
+                "--versionType", "release"
             )
         )
 

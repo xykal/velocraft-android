@@ -6,17 +6,20 @@ import java.io.File
 
 /**
  * Manages the local directory structure, pre-tuned configuration files (`options.txt` &
- * `sodium-options.json`), and external shaderpack synchronization for Minecraft 1.20.4 (Fabric).
+ * `sodium-options.json`), Android LWJGL 3 GLFW classes jar, and external shaderpack
+ * synchronization for Minecraft 1.20.4 (Fabric).
  */
 class DirectBootProvisioner(private val context: Context) {
 
     private val activeAbi: String = if (android.os.Process.is64Bit()) "arm64-v8a" else "armeabi-v7a"
-    val rootEngineDir: File = File(context.filesDir, "velocraft-engine")
+    val rootEngineDir: File = File(context.filesDir, "velocraft-engine").canonicalFile
     val gameDir: File = File(rootEngineDir, "minecraft")
     val modsDir: File = File(gameDir, "mods")
     val configDir: File = File(gameDir, "config")
     val assetsDir: File = File(rootEngineDir, "assets")
     val librariesDir: File = File(rootEngineDir, "libraries")
+    val lwjglDir: File = File(rootEngineDir, "lwjgl3")
+    val lwjglGlfwJar: File = File(lwjglDir, "lwjgl-glfw-classes.jar")
     val jreDir: File = File(rootEngineDir, "jre21-$activeAbi")
     val nativesDir: File = File(rootEngineDir, "natives-$activeAbi")
     private val readyMarkerFile: File = File(rootEngineDir, ".velocraft_ready_v6_$activeAbi")
@@ -24,7 +27,7 @@ class DirectBootProvisioner(private val context: Context) {
     fun isEngineProvisioned(): Boolean = readyMarkerFile.exists()
 
     fun prepareDirectoriesAndConfigs(includeFullMusicAssets: Boolean = true) {
-        listOf(gameDir, modsDir, configDir, assetsDir, librariesDir, jreDir, nativesDir).forEach {
+        listOf(gameDir, modsDir, configDir, assetsDir, librariesDir, lwjglDir, jreDir, nativesDir).forEach {
             it.mkdirs()
         }
 
@@ -34,6 +37,7 @@ class DirectBootProvisioner(private val context: Context) {
         val profile = JSONObject(profileJsonStr)
 
         RuntimeExtractor.linkApkNativeLibraries(context, nativesDir)
+        extractBundledLwjglGlfwJar()
         writePreTunedOptionsTxt(profile.getJSONObject("defaultOptionsTxt"), includeFullMusicAssets)
         writePreTunedSodiumOptions(profile.getJSONObject("defaultSodiumOptions"))
         extractBundledBridgeMod()
@@ -43,6 +47,20 @@ class DirectBootProvisioner(private val context: Context) {
 
     fun markEngineProvisioned() {
         readyMarkerFile.writeText("provisioned_mc=1.20.4\nabi=$activeAbi\n")
+    }
+
+    private fun extractBundledLwjglGlfwJar() {
+        try {
+            if (!lwjglGlfwJar.exists() || lwjglGlfwJar.length() < 1_000_000L) {
+                lwjglDir.mkdirs()
+                context.assets.open("lwjgl3/lwjgl-glfw-classes.jar").use { input ->
+                    lwjglGlfwJar.outputStream().use { output ->
+                        input.copyTo(output)
+                    }
+                }
+            }
+        } catch (_: Exception) {
+        }
     }
 
     private fun writePreTunedOptionsTxt(opts: JSONObject, includeFullMusicAssets: Boolean) {

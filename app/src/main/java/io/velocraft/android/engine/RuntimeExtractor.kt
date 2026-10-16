@@ -5,8 +5,9 @@ import java.io.File
 import java.util.zip.ZipInputStream
 
 /**
- * Extracts embedded or downloaded ARM64 runtime archives (OpenJDK 21 ARM64 + LWJGL3-Android
- * + MobileGlues / GL4ES renderer shared objects) and marks native binaries executable.
+ * Extracts embedded or downloaded runtime archives and links APK native shared libraries
+ * (`libgl4es_114.so`, `liblwjgl*.so`, `libopenal.so`, `libfreetype.so`, `libjnidispatch.so`,
+ * and `libvelocraft_bridge.so` -> `libpojavexec.so`) into `nativesDir`.
  */
 object RuntimeExtractor {
 
@@ -18,7 +19,6 @@ object RuntimeExtractor {
             var entry = zis.nextEntry
             while (entry != null) {
                 val outFile = File(targetDir, entry.name)
-                // Prevent Zip Slip vulnerability
                 if (!outFile.canonicalPath.startsWith(targetDir.canonicalPath)) {
                     throw SecurityException("Blocked Zip Slip path traversal: ${entry.name}")
                 }
@@ -43,7 +43,7 @@ object RuntimeExtractor {
 
     /**
      * Copies native shared libraries from the APK's nativeLibraryDir into the LWJGL natives path
-     * if needed by dynamic dlopen lookups.
+     * and aliases `libvelocraft_bridge.so` as `libpojavexec.so` for `lwjgl-glfw-classes.jar`.
      */
     fun linkApkNativeLibraries(context: Context, nativesDir: File) {
         nativesDir.mkdirs()
@@ -56,6 +56,13 @@ object RuntimeExtractor {
                 if (!dest.exists() || dest.length() != soFile.length()) {
                     soFile.copyTo(dest, overwrite = true)
                     dest.setExecutable(true, false)
+                    dest.setReadable(true, false)
+                }
+                if (soFile.name == "libvelocraft_bridge.so") {
+                    val pojavExecAlias = File(nativesDir, "libpojavexec.so")
+                    soFile.copyTo(pojavExecAlias, overwrite = true)
+                    pojavExecAlias.setExecutable(true, false)
+                    pojavExecAlias.setReadable(true, false)
                 }
             }
         }

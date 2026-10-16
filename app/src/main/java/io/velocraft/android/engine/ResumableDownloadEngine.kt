@@ -502,14 +502,10 @@ object ResumableDownloadEngine {
             }
         }
 
-        // Ensure lib/jli/libjli.so and lib/libjli.so both exist for any dlopen path
+        // Ensure lib/libjli.so exists at root of lib/
         val jliRoot = File(destDir, "lib/libjli.so")
         val jliSub = File(destDir, "lib/jli/libjli.so")
-        if (jliRoot.exists() && !jliSub.exists()) {
-            jliSub.parentFile?.mkdirs()
-            jliRoot.copyTo(jliSub, overwrite = true)
-            jliSub.setExecutable(true, false)
-        } else if (jliSub.exists() && !jliRoot.exists()) {
+        if (jliSub.exists() && !jliRoot.exists()) {
             jliRoot.parentFile?.mkdirs()
             jliSub.copyTo(jliRoot, overwrite = true)
             jliRoot.setExecutable(true, false)

@@ -76,7 +76,7 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        VeloLogger.section("BOOT", "GameActivity.onCreate() started (v0.7.1-release Real OpenJDK + Live Boot Console)")
+        VeloLogger.section("BOOT", "GameActivity.onCreate() started (v0.7.2-release Real OpenJDK + Live Boot Console)")
 
         val hw = JvmOptimizer.detectHardware(this)
         val effectiveRenderer = RendererProfileManager.resolveEffectiveBackend(this)
@@ -403,10 +403,20 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
     }
 
     private fun buildClasspathString(librariesDir: File): String {
-        if (!librariesDir.exists()) return ""
-        return librariesDir.walkTopDown()
-            .filter { it.isFile && it.extension == "jar" }
-            .joinToString(File.pathSeparator) { it.absolutePath }
+        val entries = ArrayList<String>()
+        if (provisioner.lwjglGlfwJar.exists() && provisioner.lwjglGlfwJar.length() > 100_000L) {
+            entries.add(provisioner.lwjglGlfwJar.canonicalPath)
+        }
+        if (librariesDir.exists()) {
+            librariesDir.walkTopDown()
+                .filter { f ->
+                    f.isFile &&
+                        f.extension.equals("jar", ignoreCase = true) &&
+                        !f.invariantSeparatorsPath.contains("/org/lwjgl/")
+                }
+                .forEach { entries.add(it.canonicalPath) }
+        }
+        return entries.joinToString(File.pathSeparator)
     }
 
     private fun enableImmersiveHighRefreshDisplaySafely() {
