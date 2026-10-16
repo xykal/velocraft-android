@@ -1,18 +1,60 @@
-name: Build VeloCraft Android APK & Fabric Bridge
+name: Build VeloCraft APK & Draft Release (Secured)
 
+# =======================================================================================
+# SECURITY POLICY FOR PUBLIC REPO:
+# 1. NO `pull_request` or `pull_request_target` triggers -> External forks CANNOT trigger builds.
+# 2. Only `push` to `main` (requires write token) or manual `workflow_dispatch` (requires write/admin token).
+# 3. Releases are strictly created as DRAFT (`draft: true`) so only the repo owner can review & publish.
+# =======================================================================================
 on:
   push:
-    branches: [ "main", "develop" ]
-  pull_request:
     branches: [ "main" ]
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Tag versi untuk Draft Release"
+        required: false
+        default: "v0.1.0-alpha"
+      create_draft_release:
+        description: "Buat / Update Draft Release otomatis setelah build selesai"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: velocraft-build-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  build-engine:
-    name: Build Companion Fabric Mod & Android NDK APK (ARM64)
+  build-and-draft-release:
+    name: Build Companion Fabric Mod + Android NDK APK (ARM64)
     runs-on: ubuntu-latest
+    # Hard gate: block any fork execution and verify repository owner is xykal
+    if: >-
+      github.event.repository.fork == false &&
+      github.repository_owner == 'xykal' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
 
     steps:
+      - name: Security Gate — Verify Token Holder / Collaborator Write Permission
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+          REPO: ${{ github.repository }}
+        run: |
+          echo "Verifying write/admin authorization for actor: $ACTOR on $REPO..."
+          PERM=$(gh api "/repos/$REPO/collaborators/$ACTOR/permission" --jq '.permission' 2>/dev/null || echo "none")
+          echo "Detected permission level: $PERM"
+          if [[ "$PERM" != "admin" && "$PERM" != "write" && "$ACTOR" != "xykal" ]]; then
+            echo "::error::Unauthorized actor ($ACTOR). Only repository owner (xykal) or valid token holders with write/admin access can run this workflow."
+            exit 1
+          fi
+          echo "Authorization verified ($ACTOR -> $PERM)."
+
       - name: Checkout Repository
         uses: actions/checkout@v4
 
@@ -21,32 +63,62 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '21'
-          cache: 'gradle'
 
       - name: Set up Android SDK & NDK r27
         uses: android-actions/setup-android@v3
 
-      - name: Install Android NDK & CMake
+      - name: Install Android NDK 27.0.12077973 & CMake 3.22.1
         run: |
+          yes | sdkmanager --licenses > /dev/null || true
           sdkmanager --install "ndk;27.0.12077973" "cmake;3.22.1" "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
 
       - name: Build Companion Fabric Bridge Mod (:fabric-bridge-mod)
         run: |
-          chmod +x gradlew || true
           gradle :fabric-bridge-mod:build --no-daemon
 
       - name: Bundle Fabric Bridge Mod into Android APK Assets
         run: |
           mkdir -p app/src/main/assets/mods
-          cp fabric-bridge-mod/build/libs/velocraft-bridge-mod-*.jar app/src/main/assets/mods/velocraft-bridge-mod.jar || true
+          cp fabric-bridge-mod/build/libs/velocraft-bridge-mod-*.jar app/src/main/assets/mods/velocraft-bridge-mod.jar
 
       - name: Assemble VeloCraft Android APK (arm64-v8a)
         run: |
           gradle :app:assembleDebug --no-daemon
+          cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/VeloCraft-Direct-v0.1.0-alpha-arm64.apk
 
-      - name: Upload VeloCraft Debug APK Artifact
+      - name: Upload APK Build Artifact
         uses: actions/upload-artifact@v4
         with:
           name: VeloCraft-Direct-arm64-debug
-          path: app/build/outputs/apk/debug/*.apk
-          retention-days: 14
+          path: |
+            app/build/outputs/apk/debug/VeloCraft-Direct-v0.1.0-alpha-arm64.apk
+            fabric-bridge-mod/build/libs/velocraft-bridge-mod-*.jar
+          retention-days: 30
+
+      - name: Create or Update Draft Release (Owner-Only Visibility)
+        if: ${{ github.event_name == 'push' || inputs.create_draft_release == true }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release_tag || 'v0.1.0-alpha' }}
+          name: "VeloCraft Direct ${{ inputs.release_tag || 'v0.1.0-alpha' }} (Draft Build — ARM64)"
+          draft: true
+          prerelease: true
+          generate_release_notes: true
+          body: |
+            ### ⚡ VeloCraft Direct — Build Otomatis (Status: DRAFT)
+            > **Catatan:** Release ini berstatus **Draft** (hanya terlihat oleh pemilik repo / pemegang token dengan akses *write/admin*).
+
+            #### 📦 Komponen di Dalam Build Ini:
+            - **`VeloCraft-Direct-v0.1.0-alpha-arm64.apk`**: Aplikasi Android *Direct-to-Game* (Tanpa Launcher) dengan Lock-Free C++20 Input Queue (`<0.5ms`) + Pro PvP HUD + Gyroscope 200Hz.
+            - **`velocraft-bridge-mod-0.1.0.jar`**: Companion Mod Fabric 1.20.4 untuk sinkronisasi otomatis mode *Crosshair PvP* $\leftrightarrow$ *GUI Touch Cursor* (Inventory/Chest).
+            - **Pre-Tuned Optimization Stack**: Sodium, Lithium, FerriteCore, ImmediatelyFast, EntityCulling, ModernFix.
+          files: |
+            app/build/outputs/apk/debug/VeloCraft-Direct-v0.1.0-alpha-arm64.apk
+            fabric-bridge-mod/build/libs/velocraft-bridge-mod-*.jar
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
