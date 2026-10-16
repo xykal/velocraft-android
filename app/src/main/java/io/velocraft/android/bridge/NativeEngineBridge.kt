@@ -5,10 +5,30 @@ import io.velocraft.android.util.VeloLogger
 
 /**
  * Bulletproof Kotlin wrapper around VeloCraft's lock-free C++20 JNI bridge (`libvelocraft_bridge.so`).
- * Logs every native initialization step to `/storage/emulated/0/Android/media/io.velocraft.android/log/`
+ * Logs every native initialization step to `/storage/emulated/0/Android/media/id.xyverse.minecraft/log/`
  * and guards all JNI calls so native library errors can never crash the UI thread.
  */
 object NativeEngineBridge {
+
+    data class BootTelemetrySnapshot(
+        val stageIndex: Int,
+        val totalStages: Int,
+        val percent: Int,
+        val loadedClasses: Int,
+        val targetSplashClasses: Int,
+        val classesPerSec: Int,
+        val jvmUsedRamMb: Int,
+        val jvmMaxRamMb: Int,
+        val elapsedSec: Int,
+        val etaMojangSplashSec: Int,
+        val etaMinecraftMenuSec: Int,
+        val mojangSplashReached: Boolean,
+        val titleScreenReached: Boolean,
+        val swapBuffersCount: Int,
+        val stageTitle: String,
+        val subTaskDetail: String,
+        val activeClassName: String
+    )
 
     @Volatile
     var isNativeLoaded: Boolean = false
@@ -79,6 +99,37 @@ object NativeEngineBridge {
     external fun nativeConfigureRendererEnv(jreHomePath: String, rendererLibName: String, cacheDirPath: String)
     external fun nativeLaunchDirectJvm(jliLibPath: String, jvmArgsArray: Array<String>): Int
     external fun nativeGetArchitectureAbi(): String
+    external fun nativeGetBootTelemetrySnapshot(): String
+
+    fun getBootTelemetry(): BootTelemetrySnapshot? {
+        if (!isNativeLoaded) return null
+        return try {
+            val raw = nativeGetBootTelemetrySnapshot()
+            val parts = raw.split("|", limit = 17)
+            if (parts.size < 17) return null
+            BootTelemetrySnapshot(
+                stageIndex = parts[0].toIntOrNull() ?: 1,
+                totalStages = parts[1].toIntOrNull() ?: 10,
+                percent = parts[2].toIntOrNull() ?: 10,
+                loadedClasses = parts[3].toIntOrNull() ?: 0,
+                targetSplashClasses = parts[4].toIntOrNull() ?: 5400,
+                classesPerSec = parts[5].toIntOrNull() ?: 0,
+                jvmUsedRamMb = parts[6].toIntOrNull() ?: 0,
+                jvmMaxRamMb = parts[7].toIntOrNull() ?: 768,
+                elapsedSec = parts[8].toIntOrNull() ?: 0,
+                etaMojangSplashSec = parts[9].toIntOrNull() ?: 35,
+                etaMinecraftMenuSec = parts[10].toIntOrNull() ?: 60,
+                mojangSplashReached = parts[11] == "1",
+                titleScreenReached = parts[12] == "1",
+                swapBuffersCount = parts[13].toIntOrNull() ?: 0,
+                stageTitle = parts[14],
+                subTaskDetail = parts[15],
+                activeClassName = parts[16]
+            )
+        } catch (_: Throwable) {
+            null
+        }
+    }
 
     fun setSurface(surface: Surface?, width: Int, height: Int) {
         if (!isNativeLoaded) return

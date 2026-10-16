@@ -76,7 +76,7 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        VeloLogger.section("BOOT", "GameActivity.onCreate() started (v0.7.2-release Real OpenJDK + Live Boot Console)")
+        VeloLogger.section("BOOT", "GameActivity.onCreate() started (v0.7.3-release Specific Boot Telemetry & Mojang Splash ETA)")
 
         val hw = JvmOptimizer.detectHardware(this)
         val effectiveRenderer = RendererProfileManager.resolveEffectiveBackend(this)
@@ -329,8 +329,8 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
             proHudOverlay.activeRendererLabel = effectiveRenderer.id.uppercase()
             bootLogOverlay.startBootMonitoring()
             bootLogOverlay.updateBootStage(
-                title = "TAHAP 1/5: Menyiapkan Direktori Game, Mod Stack & Shaderpack...",
-                progress = 20,
+                title = "TAHAP 1/10: Menyiapkan Direktori Game, Mod Stack & Shaderpack...",
+                progress = 8,
                 summary = summaryLine
             )
             proHudOverlay.postInvalidateOnAnimation()
@@ -341,12 +341,12 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 val syncedShaders = RendererProfileManager.syncExternalShaderpacks(this, provisioner.gameDir)
                 VeloLogger.section(
                     "STAGE-1",
-                    "Directories & Shaderpacks verified (SyncedShaders=$syncedShaders, ModsActive=${readiness.installedModsCount})."
+                    "Direktori & Shaderpack siap (Shader=$syncedShaders, ModAktif=${readiness.installedModsCount})."
                 )
 
                 bootLogOverlay.updateBootStage(
-                    title = "TAHAP 2/5: Mengatur Variabel Lingkungan OpenJDK & Renderer (${effectiveRenderer.id})...",
-                    progress = 40
+                    title = "TAHAP 1/10: Mengonfigurasi Lingkungan OpenJDK 17 & Renderer (${effectiveRenderer.id})...",
+                    progress = 12
                 )
                 NativeEngineBridge.configureRendererEnv(
                     jreHomePath = provisioner.jreDir.absolutePath,
@@ -355,12 +355,12 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 )
 
                 bootLogOverlay.updateBootStage(
-                    title = "TAHAP 3/5: Merakit Classpath JAR Minecraft 1.20.4 & Fabric 0.16.9...",
-                    progress = 60
+                    title = "TAHAP 2/10: Merakit Classpath JAR Minecraft 1.20.4 & Fabric 0.16.9...",
+                    progress = 15
                 )
                 val classpath = buildClasspathString(provisioner.librariesDir)
                 val jarCount = classpath.split(File.pathSeparator).count { it.isNotBlank() }
-                VeloLogger.section("STAGE-3", "Assembled Classpath with $jarCount JAR libraries.")
+                VeloLogger.section("STAGE-2", "Berhasil merakit Classpath dengan $jarCount pustaka JAR.")
 
                 val session = PlayerSessionManager(this@GameActivity).getActiveSession()
                 val jvmArgs = JvmOptimizer.buildDirectBootJvmArgs(
@@ -374,21 +374,13 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
                     accessToken = session.accessToken
                 )
 
-                bootLogOverlay.updateBootStage(
-                    title = "TAHAP 4/5: Memuat OpenJDK HotSpot (libjli.so & libjvm.so)...",
-                    progress = 80
-                )
                 VeloLogger.section(
-                    "STAGE-4",
-                    "Booting KnotClient for '${session.username}' with ${jvmArgs.size} JVM args and renderer ${effectiveRenderer.id}"
+                    "STAGE-2",
+                    "Memulai peluncuran langsung OpenJDK 17 HotSpot untuk '${session.username}' (${jvmArgs.size} argumen, Renderer=${effectiveRenderer.id})"
                 )
 
-                bootLogOverlay.updateBootStage(
-                    title = "TAHAP 5/5: Menjalankan Fabric Loader KnotClient (Minecraft 1.20.4)...",
-                    progress = 95
-                )
                 val exitCode = NativeEngineBridge.launchDirectJvm(jliLib.absolutePath, jvmArgs)
-                VeloLogger.section("RUNTIME", "JVM exited with code: $exitCode")
+                VeloLogger.section("RUNTIME", "JVM selesai dengan kode keluar: $exitCode")
                 jvmStarted = false
                 bootLogOverlay.notifyJvmFinished(exitCode)
             } catch (t: Throwable) {
