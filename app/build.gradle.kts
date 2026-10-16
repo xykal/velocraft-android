@@ -11,21 +11,26 @@ android {
 
     defaultConfig {
         applicationId = "io.velocraft.android"
-        minSdk = 26 // Android 8.0+ (Required for OpenJDK 21 ARM64 & AHardwareBuffer / Vulkan)
+        minSdk = 24 // Android 7.0+ (Supports older 32-bit armeabi-v7a & modern 64-bit arm64-v8a devices)
         targetSdk = 34
-        versionCode = 2
-        versionName = "0.2.0-alpha"
-
-        ndk {
-            // Focus exclusively on 64-bit ARM for modern Minecraft Java 21 performance
-            abiFilters += listOf("arm64-v8a")
-        }
+        versionCode = 3
+        versionName = "0.3.0-alpha"
 
         externalNativeBuild {
             cmake {
                 cppFlags += listOf("-std=c++20", "-O3", "-ffast-math", "-Wall", "-fno-exceptions")
                 arguments += listOf("-DANDROID_STL=c++_shared")
             }
+        }
+    }
+
+    // Generate separate lightweight APKs for arm64-v8a and armeabi-v7a + a Universal APK
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a")
+            isUniversalApk = true
         }
     }
 

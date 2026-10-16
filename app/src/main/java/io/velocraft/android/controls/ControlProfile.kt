@@ -13,13 +13,13 @@ import java.io.File
  */
 data class HudButtonConfig(
     val id: String,
-    val label: String,
+    var label: String,
     var normX: Float,
     var normY: Float,
     var radiusDp: Float,
     var opacity: Float = 0.78f,
     val actionType: ActionType,
-    val keyCodeOrButton: Int = 0,
+    var keyCodeOrButton: Int = 0,
     val isToggle: Boolean = false,
     val accentHex: Int = 0xFF38BDF8.toInt()
 )
@@ -32,7 +32,8 @@ enum class ActionType {
     HOTBAR_SLOT,        // Direct 1-9 slot selection
     GYRO_TOGGLE,        // Enables/Disables Gyroscope aiming
     HUD_EDITOR_TOGGLE,  // Opens in-game drag-and-drop button customization mode
-    QUICK_SETTINGS      // Opens floating in-game Pro PvP Quick Settings drawer
+    QUICK_SETTINGS,     // Opens floating in-game Pro PvP Quick Settings drawer
+    PVP_COMBO_MACRO     // 1-Tap Utility Swap -> Right Click -> Return to Sword Slot 1
 }
 
 object ControlProfileManager {
@@ -56,6 +57,7 @@ object ControlProfileManager {
         HudButtonConfig("btn_place", "PLACE (R)", 0.92f, 0.52f, 36f, 0.88f, ActionType.MOUSE_RIGHT_PLACE, NativeEngineBridge.MOUSE_RIGHT, accentHex = 0xFF3B82F6.toInt()),
         HudButtonConfig("btn_jump", "JUMP", 0.90f, 0.78f, 34f, 0.82f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_SPACE, accentHex = 0xFF10B981.toInt()),
         HudButtonConfig("btn_offhand", "OFFHAND (F)", 0.74f, 0.80f, 24f, 0.75f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_F, accentHex = 0xFFA855F7.toInt()),
+        HudButtonConfig("btn_macro", "⚡ MACRO", 0.65f, 0.66f, 25f, 0.82f, ActionType.PVP_COMBO_MACRO, accentHex = 0xFFEC4899.toInt()),
         HudButtonConfig("btn_drop", "DROP (Q)", 0.74f, 0.48f, 22f, 0.72f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_Q),
 
         // Top Utility Bar (Inventory, Perspective F5, Debug F3, Chat, Gyro, Layout Editor)

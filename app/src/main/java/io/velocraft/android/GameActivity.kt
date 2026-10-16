@@ -10,6 +10,7 @@ import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.widget.FrameLayout
 import androidx.appcompat.app.AppCompatActivity
+import io.velocraft.android.auth.PlayerSessionManager
 import io.velocraft.android.bridge.FabricStateBridge
 import io.velocraft.android.bridge.NativeEngineBridge
 import io.velocraft.android.controls.GyroAimController
@@ -23,7 +24,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import java.io.File
-import java.util.UUID
 
 /**
  * VeloCraft Direct-to-Game Activity ("Tanpa Launcher").
@@ -132,23 +132,26 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 firstBootSplash = null
             }
 
-            // Launch Embedded OpenJDK 21 ARM64 on dedicated Native Render Thread
+            // Launch Embedded OpenJDK (arm64-v8a or armeabi-v7a) on dedicated Native Render Thread
             Thread({
+                val hw = JvmOptimizer.detectHardware(this@GameActivity)
                 val jliLib = File(provisioner.jreDir, "lib/libjli.so")
                 NativeEngineBridge.nativeConfigureRendererEnv(
                     jreHomePath = provisioner.jreDir.absolutePath,
-                    rendererLibName = "libmobileglues.so",
+                    rendererLibName = hw.recommendedRendererLib,
                     cacheDirPath = cacheDir.absolutePath
                 )
 
+                val session = PlayerSessionManager(this@GameActivity).getActiveSession()
                 val jvmArgs = JvmOptimizer.buildDirectBootJvmArgs(
                     context = this@GameActivity,
                     gameDir = provisioner.gameDir,
                     assetsDir = provisioner.assetsDir,
                     nativesDir = provisioner.nativesDir,
                     classpath = buildClasspathString(provisioner.librariesDir),
-                    playerUsername = "VeloPlayer",
-                    playerUuid = UUID.nameUUIDFromBytes("OfflinePlayer:VeloPlayer".toByteArray()).toString()
+                    playerUsername = session.username,
+                    playerUuid = session.uuid,
+                    accessToken = session.accessToken
                 )
 
                 if (jliLib.exists()) {

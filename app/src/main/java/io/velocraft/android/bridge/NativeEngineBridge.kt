@@ -60,6 +60,7 @@ object NativeEngineBridge {
     external fun nativeSetCursorGrabbed(grabbed: Boolean)
     external fun nativeConfigureRendererEnv(jreHomePath: String, rendererLibName: String, cacheDirPath: String)
     external fun nativeLaunchDirectJvm(jliLibPath: String, jvmArgsArray: Array<String>): Int
+    external fun nativeGetArchitectureAbi(): String
 
     /**
      * Helper to select a hotbar slot (1-9) with a rapid press+release pulse.

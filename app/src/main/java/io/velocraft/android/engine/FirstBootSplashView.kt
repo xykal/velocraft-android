@@ -72,7 +72,7 @@ class FirstBootSplashView(context: Context) : View(context) {
         canvas.drawText("⚡ VELOCRAFT DIRECT 1.20.4", cx, top + dp(40f), titlePaint)
 
         val hwText =
-            "SoC: ${hwProfile.socModel}  •  RAM Heap: ${hwProfile.allocatedHeapMb} MB  •  Cores: ${hwProfile.totalCores}"
+            "ABI: ${hwProfile.abi}  •  SoC: ${hwProfile.socModel}  •  RAM Heap: ${hwProfile.allocatedHeapMb} MB"
         canvas.drawText(hwText, cx, top + dp(66f), subPaint)
 
         subPaint.color = Color.WHITE

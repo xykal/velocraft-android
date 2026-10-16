@@ -2,18 +2,22 @@ package io.velocraft.android.controls
 
 import android.app.AlertDialog
 import android.content.Context
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.Switch
 import android.widget.TextView
+import io.velocraft.android.auth.PlayerSessionManager
 
 /**
- * In-Game Pro PvP Quick Settings Drawer.
+ * In-Game Pro PvP Quick Settings & Account Manager Drawer.
  * Opens instantly over the game surface without restarting Minecraft, allowing players to tune:
+ * - Player Username (Offline / MSA Session)
  * - Touch Camera Look Sensitivity
- * - Gyroscope Sensitivity & Activation Mode (Off / Always On / Hold Right-Click)
- * - Auto-Clicker / Hold-to-Attack (Off / 12 CPS / 16 CPS)
- * - Global HUD Button Opacity
+ * - Gyroscope Sensitivity
+ * - Hold-to-Attack Auto-Clicker (14 CPS)
+ * - FastPlace / Bridging Right-Click Assist (15 CPS)
+ * - Dot + Circle Pro Crosshair
  * - Reset Default Pro PvP Layout
  */
 object QuickSettingsSheet {
@@ -24,11 +28,26 @@ object QuickSettingsSheet {
         gyroController: GyroAimController,
         onResetLayout: () -> Unit
     ) {
+        val sessionManager = PlayerSessionManager(context)
+        val currentSession = sessionManager.getActiveSession()
+
         val container = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             val pad = (18 * context.resources.displayMetrics.density).toInt()
             setPadding(pad, pad, pad, pad)
         }
+
+        // 0. Player Account / Username Field
+        val userLabel = TextView(context).apply {
+            text = "Player Username (${currentSession.accountType.name}):"
+        }
+        val userInput = EditText(context).apply {
+            setText(currentSession.username)
+            hint = "Masukkan Username Minecraft"
+            isSingleLine = true
+        }
+        container.addView(userLabel)
+        container.addView(userInput)
 
         // 1. Touch Look Sensitivity Slider
         val touchLabel = TextView(context).apply {
@@ -81,7 +100,17 @@ object QuickSettingsSheet {
         }
         container.addView(autoClickSwitch)
 
-        // 4. Crosshair Style Switcher
+        // 4. FastPlace / Godbridge Right-Click Assist Toggle (15 CPS)
+        val fastPlaceSwitch = Switch(context).apply {
+            text = "FastPlace / Bridging Hold (15 CPS Right-Click)"
+            isChecked = hudView.macroEngine.fastPlaceEnabled
+            setOnCheckedChangeListener { _, checked ->
+                hudView.macroEngine.fastPlaceEnabled = checked
+            }
+        }
+        container.addView(fastPlaceSwitch)
+
+        // 5. Crosshair Style Switcher
         val crosshairSwitch = Switch(context).apply {
             text = "Dot + Circle Pro Crosshair"
             isChecked = hudView.useProCircleCrosshair
@@ -93,9 +122,13 @@ object QuickSettingsSheet {
         container.addView(crosshairSwitch)
 
         AlertDialog.Builder(context)
-            .setTitle("⚡ VeloCraft Pro PvP Settings")
+            .setTitle("⚡ VeloCraft Pro PvP & Account Settings")
             .setView(container)
             .setPositiveButton("Simpan & Lanjut Main") { dialog, _ ->
+                val newName = userInput.text?.toString()?.trim().orEmpty()
+                if (newName.isNotEmpty() && newName != currentSession.username) {
+                    sessionManager.saveOfflineSession(newName)
+                }
                 dialog.dismiss()
             }
             .setNeutralButton("Reset Posisi Tombol HUD") { dialog, _ ->

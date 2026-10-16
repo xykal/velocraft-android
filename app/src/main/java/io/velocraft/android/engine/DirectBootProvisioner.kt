@@ -25,15 +25,16 @@ class DirectBootProvisioner(private val context: Context) {
         val percent: Int
     )
 
+    private val activeAbi: String = if (android.os.Process.is64Bit()) "arm64-v8a" else "armeabi-v7a"
     val rootEngineDir: File = File(context.filesDir, "velocraft-engine")
     val gameDir: File = File(rootEngineDir, "minecraft")
     val modsDir: File = File(gameDir, "mods")
     val configDir: File = File(gameDir, "config")
     val assetsDir: File = File(rootEngineDir, "assets")
     val librariesDir: File = File(rootEngineDir, "libraries")
-    val jreDir: File = File(rootEngineDir, "jre21-arm64")
-    val nativesDir: File = File(rootEngineDir, "natives-arm64")
-    private val readyMarkerFile: File = File(rootEngineDir, ".velocraft_ready_v2")
+    val jreDir: File = File(rootEngineDir, "jre21-$activeAbi")
+    val nativesDir: File = File(rootEngineDir, "natives-$activeAbi")
+    private val readyMarkerFile: File = File(rootEngineDir, ".velocraft_ready_v3_$activeAbi")
 
     fun isEngineProvisioned(): Boolean = readyMarkerFile.exists()
 
@@ -54,9 +55,13 @@ class DirectBootProvisioner(private val context: Context) {
         val mcVersion = profile.optString("minecraftVersion", "1.20.4")
         val fabricVersion = profile.optString("fabricLoaderVersion", "0.16.7")
 
-        // Step 1: Link Native ARM64 Bridges & Write Pre-Tuned Options
-        onProgress(ProvisionProgress(1, 5, "Menyiapkan Native Bridge ARM64 & options.txt...", 12))
+        // Step 1: Link Native ARM64 Bridges & Verify OpenJDK 21 ARM64 Runtime
+        onProgress(ProvisionProgress(1, 5, "Menyiapkan Native Bridge ARM64 & OpenJDK 21...", 12))
         RuntimeExtractor.linkApkNativeLibraries(context, nativesDir)
+        val runtimeDownloader = Arm64RuntimeDownloader(jreDir, nativesDir)
+        runtimeDownloader.ensureArm64RuntimeReady { status, _ ->
+            onProgress(ProvisionProgress(1, 5, status, 18))
+        }
         writePreTunedOptionsTxt(profile.getJSONObject("defaultOptionsTxt"))
 
         // Step 2: Write Pre-Tuned Sodium & FerriteCore Config

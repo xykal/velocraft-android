@@ -52,6 +52,7 @@ class ProHudOverlayView(
     var isEditMode: Boolean = false
     var holdAutoClickEnabled: Boolean = false
     var useProCircleCrosshair: Boolean = false
+    val macroEngine = MacroEngine()
     private var isHoldingAttackButton: Boolean = false
     private var editingButton: HudButtonConfig? = null
 
@@ -400,6 +401,7 @@ class ProHudOverlayView(
             ActionType.MOUSE_RIGHT_PLACE -> {
                 rightClickTimestamps.addLast(System.currentTimeMillis())
                 NativeEngineBridge.nativeSendMouseButton(NativeEngineBridge.MOUSE_RIGHT, NativeEngineBridge.GLFW_PRESS)
+                macroEngine.onRightClickDown()
             }
             ActionType.HOTBAR_SLOT -> {
                 NativeEngineBridge.tapHotbarSlot(btn.keyCodeOrButton)
@@ -416,6 +418,13 @@ class ProHudOverlayView(
                     resetToDefaultLayout()
                 }
             }
+            ActionType.PVP_COMBO_MACRO -> {
+                rightClickTimestamps.addLast(System.currentTimeMillis())
+                macroEngine.triggerQuickUtilityMacro { updatedSlot ->
+                    activeHotbarSlot = updatedSlot
+                    postInvalidateOnAnimation()
+                }
+            }
         }
     }
 
@@ -430,6 +439,7 @@ class ProHudOverlayView(
                 NativeEngineBridge.nativeSendMouseButton(NativeEngineBridge.MOUSE_LEFT, NativeEngineBridge.GLFW_RELEASE)
             }
             ActionType.MOUSE_RIGHT_PLACE -> {
+                macroEngine.onRightClickUp()
                 NativeEngineBridge.nativeSendMouseButton(NativeEngineBridge.MOUSE_RIGHT, NativeEngineBridge.GLFW_RELEASE)
             }
             else -> Unit

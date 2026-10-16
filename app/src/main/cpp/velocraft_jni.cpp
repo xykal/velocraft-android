@@ -17,6 +17,14 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
+#if defined(__aarch64__)
+#define VELOCRAFT_ABI_NAME "arm64-v8a"
+#elif defined(__arm__)
+#define VELOCRAFT_ABI_NAME "armeabi-v7a"
+#else
+#define VELOCRAFT_ABI_NAME "unknown"
+#endif
+
 namespace {
 
 using namespace velocraft::input;
@@ -258,7 +266,7 @@ Java_io_velocraft_android_bridge_NativeEngineBridge_nativeLaunchDirectJvm(
         env->DeleteLocalRef(jstr);
     }
 
-    LOGI("Booting Embedded OpenJDK 21 ARM64 directly into Fabric KnotClient (%d args)...", argc);
+    LOGI("Booting Embedded OpenJDK (%s) directly into Fabric KnotClient (%d args)...", VELOCRAFT_ABI_NAME, argc);
     const int exitCode = jliLaunch(
         argc, argv.data(),
         0, nullptr,
@@ -273,6 +281,13 @@ Java_io_velocraft_android_bridge_NativeEngineBridge_nativeLaunchDirectJvm(
     }
 
     return exitCode;
+}
+
+JNIEXPORT jstring JNICALL
+Java_io_velocraft_android_bridge_NativeEngineBridge_nativeGetArchitectureAbi(
+    JNIEnv* env, jobject /*thiz*/
+) {
+    return env->NewStringUTF(VELOCRAFT_ABI_NAME);
 }
 
 } // extern "C"

@@ -1,4 +1,4 @@
-name: Build VeloCraft APK & Draft Release (Secured)
+name: Build VeloCraft Dual-ABI APK (arm64-v8a & armeabi-v7a) + Draft Release
 
 # =======================================================================================
 # SECURITY POLICY FOR PUBLIC REPO:
@@ -14,7 +14,7 @@ on:
       release_tag:
         description: "Tag versi untuk Draft Release"
         required: false
-        default: "v0.1.0-alpha"
+        default: "v0.3.0-alpha"
       create_draft_release:
         description: "Buat / Update Draft Release otomatis setelah build selesai"
         required: false
@@ -31,7 +31,7 @@ concurrency:
 
 jobs:
   build-and-draft-release:
-    name: Build Companion Fabric Mod + Android NDK APK (ARM64)
+    name: Build Fabric Bridge Mod + Dual-ABI Android APKs (arm64-v8a & armeabi-v7a)
     runs-on: ubuntu-latest
     # Hard gate: block any fork execution and verify repository owner is xykal
     if: >-
@@ -89,39 +89,52 @@ jobs:
           cp "$JAR_FILE" app/src/main/assets/mods/velocraft-bridge-mod.jar
           cp "$JAR_FILE" fabric-bridge-mod/build/libs/velocraft-bridge-mod-0.1.0.jar || true
 
-      - name: Assemble VeloCraft Android APK (arm64-v8a)
+      - name: Assemble Dual-ABI VeloCraft APKs (arm64-v8a, armeabi-v7a & universal)
         run: |
           gradle :app:assembleDebug --no-daemon
-          cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/VeloCraft-Direct-v0.1.0-alpha-arm64.apk
+          mkdir -p dist-apks
+          cp app/build/outputs/apk/debug/app-arm64-v8a-debug.apk dist-apks/VeloCraft-Direct-v0.3.0-alpha-arm64-v8a.apk
+          cp app/build/outputs/apk/debug/app-armeabi-v7a-debug.apk dist-apks/VeloCraft-Direct-v0.3.0-alpha-armeabi-v7a.apk
+          cp app/build/outputs/apk/debug/app-universal-debug.apk dist-apks/VeloCraft-Direct-v0.3.0-alpha-universal.apk
+          ls -lh dist-apks/
 
-      - name: Upload APK Build Artifact
+      - name: Upload Dual-ABI APK Build Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: VeloCraft-Direct-arm64-debug
+          name: VeloCraft-Direct-DualABI-v0.3.0-alpha
           path: |
-            app/build/outputs/apk/debug/VeloCraft-Direct-v0.1.0-alpha-arm64.apk
-            fabric-bridge-mod/build/libs/velocraft-bridge-mod-*.jar
+            dist-apks/*.apk
+            fabric-bridge-mod/build/libs/velocraft-bridge-mod-0.1.0.jar
           retention-days: 30
 
       - name: Create or Update Draft Release (Owner-Only Visibility)
         if: ${{ github.event_name == 'push' || inputs.create_draft_release == true }}
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.release_tag || 'v0.1.0-alpha' }}
-          name: "VeloCraft Direct ${{ inputs.release_tag || 'v0.1.0-alpha' }} (Draft Build — ARM64)"
+          tag_name: ${{ inputs.release_tag || 'v0.3.0-alpha' }}
+          name: "VeloCraft Direct ${{ inputs.release_tag || 'v0.3.0-alpha' }} (Draft — arm64-v8a & armeabi-v7a)"
           draft: true
           prerelease: true
           generate_release_notes: true
           body: |
-            ### ⚡ VeloCraft Direct — Build Otomatis (Status: DRAFT)
-            > **Catatan:** Release ini berstatus **Draft** (hanya terlihat oleh pemilik repo / pemegang token dengan akses *write/admin*).
+            ### ⚡ VeloCraft Direct v0.3.0-alpha — Dual-ABI Build (`arm64-v8a` & `armeabi-v7a`) [DRAFT]
+            > **Catatan:** Release ini berstatus **Draft** (hanya terlihat oleh pemilik repo `xykal` / pemegang token dengan akses *write/admin*).
 
-            #### 📦 Komponen di Dalam Build Ini:
-            - **`VeloCraft-Direct-v0.1.0-alpha-arm64.apk`**: Aplikasi Android *Direct-to-Game* (Tanpa Launcher) dengan Lock-Free C++20 Input Queue (`<0.5ms`) + Pro PvP HUD + Gyroscope 200Hz.
-            - **`velocraft-bridge-mod-0.1.0.jar`**: Companion Mod Fabric 1.20.4 untuk sinkronisasi otomatis mode *Crosshair PvP* $\leftrightarrow$ *GUI Touch Cursor* (Inventory/Chest).
-            - **Pre-Tuned Optimization Stack**: Sodium, Lithium, FerriteCore, ImmediatelyFast, EntityCulling, ModernFix.
+            #### 📦 Pilihan File APK Berdasarkan Arsitektur HP:
+            1. **`VeloCraft-Direct-v0.3.0-alpha-arm64-v8a.apk`** — Khusus HP Android **64-bit** modern (Render Backend: *MobileGlues GLES 3.2*, Alokasi RAM Heap otomatis hingga 3.5 GB).
+            2. **`VeloCraft-Direct-v0.3.0-alpha-armeabi-v7a.apk`** — Khusus HP Android **32-bit** / spek rendah (Render Backend: *GL4ES 1.1.5*, Compact Heap `<=896MB` anti *virtual memory overflow*).
+            3. **`VeloCraft-Direct-v0.3.0-alpha-universal.apk`** — Versi **Universal** (berisi *native library* `arm64-v8a` + `armeabi-v7a` sekaligus).
+            4. **`velocraft-bridge-mod-0.1.0.jar`** — Companion Mod Fabric 1.20.4 untuk sinkronisasi *Crosshair PvP* $\leftrightarrow$ *GUI Touch Cursor*.
+
+            #### 🚀 Fitur Baru di v0.3.0-alpha:
+            - **Dual-ABI Native C++20 Engine (`arm64-v8a` & `armeabi-v7a`)** dengan pendeteksi memori 32-bit vs 64-bit otomatis.
+            - **Player Session & Auth Manager (`PlayerSessionManager.kt`)**: Dukungan akun Offline (UUID v3) & Microsoft OAuth2 / Xbox Live XSTS JWT.
+            - **PvP Macro & Bridging Engine (`MacroEngine.kt`)**: Tombol **⚡ MACRO** (*1-Tap Rod/Pearl Swap*) & **FastPlace 15 CPS Right-Click** untuk *Speed-Bridging*.
+            - **Autonomous Runtime & Modpack Resolver**: Pengunduh paralel *Mojang + Fabric + Modrinth Stack (Sodium, Lithium, FerriteCore, ImmediatelyFast, EntityCulling, ModernFix)*.
           files: |
-            app/build/outputs/apk/debug/VeloCraft-Direct-v0.1.0-alpha-arm64.apk
-            fabric-bridge-mod/build/libs/velocraft-bridge-mod-*.jar
+            dist-apks/VeloCraft-Direct-v0.3.0-alpha-arm64-v8a.apk
+            dist-apks/VeloCraft-Direct-v0.3.0-alpha-armeabi-v7a.apk
+            dist-apks/VeloCraft-Direct-v0.3.0-alpha-universal.apk
+            fabric-bridge-mod/build/libs/velocraft-bridge-mod-0.1.0.jar
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

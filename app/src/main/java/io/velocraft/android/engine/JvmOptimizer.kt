@@ -3,19 +3,23 @@ package io.velocraft.android.engine
 import android.app.ActivityManager
 import android.content.Context
 import android.os.Build
+import android.os.Process
 import java.io.File
 
 /**
  * Automatically computes the lightest, lowest-latency JVM & Garbage Collector arguments
- * for OpenJDK 21 ARM64 based on the Android device's physical RAM and CPU core count.
+ * for both 64-bit (`arm64-v8a`) and 32-bit (`armeabi-v7a`) Android devices.
  */
 object JvmOptimizer {
 
     data class HardwareProfile(
+        val abi: String,
+        val is64Bit: Boolean,
         val totalRamMb: Int,
         val allocatedHeapMb: Int,
         val totalCores: Int,
         val chunkBuilderThreads: Int,
+        val recommendedRendererLib: String,
         val socModel: String
     )
 
@@ -24,19 +28,36 @@ object JvmOptimizer {
         val memInfo = ActivityManager.MemoryInfo()
         am.getMemoryInfo(memInfo)
 
+        val is64 = Process.is64Bit()
+        val abi = if (is64) "arm64-v8a" else "armeabi-v7a"
         val totalRamMb = (memInfo.totalMem / (1024 * 1024)).toInt()
         val totalCores = Runtime.getRuntime().availableProcessors()
 
-        // Thanks to FerriteCore + ModernFix, Minecraft 1.20.4 Fabric needs ~45% less RAM than vanilla.
-        // Keeping heap compact reduces GC pause times and avoids Android LMK (Low Memory Killer).
-        val allocatedHeapMb = when {
-            totalRamMb <= 4096 -> 1408  // 4GB RAM phone -> 1.4 GB Heap
-            totalRamMb <= 6144 -> 2048  // 6GB RAM phone -> 2.0 GB Heap
-            totalRamMb <= 8192 -> 2816  // 8GB RAM phone -> 2.8 GB Heap
-            else -> 3584                // 12GB+ RAM phone -> 3.5 GB Heap
+        // 32-bit armeabi-v7a processes have a ~2.7GB virtual address space ceiling,
+        // so heap must stay <= 896MB to leave room for OpenGL ES native buffers.
+        val allocatedHeapMb = if (!is64) {
+            when {
+                totalRamMb <= 2048 -> 576
+                totalRamMb <= 3072 -> 768
+                else -> 896
+            }
+        } else {
+            when {
+                totalRamMb <= 4096 -> 1408  // 4GB RAM phone -> 1.4 GB Heap
+                totalRamMb <= 6144 -> 2048  // 6GB RAM phone -> 2.0 GB Heap
+                totalRamMb <= 8192 -> 2816  // 8GB RAM phone -> 2.8 GB Heap
+                else -> 3584                // 12GB+ RAM phone -> 3.5 GB Heap
+            }
         }
 
-        val chunkThreads = (totalCores / 2).coerceIn(2, 4)
+        val chunkThreads = if (!is64) {
+            (totalCores / 2).coerceIn(1, 2)
+        } else {
+            (totalCores / 2).coerceIn(2, 4)
+        }
+
+        val rendererLib = if (is64) "libmobileglues.so" else "libgl4es_114.so"
+
         val soc = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             Build.SOC_MODEL
         } else {
@@ -44,17 +65,20 @@ object JvmOptimizer {
         }
 
         return HardwareProfile(
+            abi = abi,
+            is64Bit = is64,
             totalRamMb = totalRamMb,
             allocatedHeapMb = allocatedHeapMb,
             totalCores = totalCores,
             chunkBuilderThreads = chunkThreads,
+            recommendedRendererLib = rendererLib,
             socModel = soc
         )
     }
 
     /**
-     * Generates the full command-line array passed directly into `JLI_Launch` (OpenJDK 21 ARM64)
-     * to boot `net.fabricmc.loader.impl.launch.knot.KnotClient` without any intermediate launcher.
+     * Generates the full command-line array passed directly into `JLI_Launch`
+     * (supports both `arm64-v8a` and `armeabi-v7a` OpenJDK runtimes).
      */
     fun buildDirectBootJvmArgs(
         context: Context,
@@ -67,10 +91,8 @@ object JvmOptimizer {
         accessToken: String = "0"
     ): Array<String> {
         val hw = detectHardware(context)
-
-        return arrayOf(
+        val args = mutableListOf(
             "java",
-            // Memory & Low-Pause Mobile G1GC Tuning
             "-Xms${hw.allocatedHeapMb}M",
             "-Xmx${hw.allocatedHeapMb}M",
             "-XX:+UnlockExperimentalVMOptions",
@@ -78,42 +100,55 @@ object JvmOptimizer {
             "-XX:MaxGCPauseMillis=25",
             "-XX:G1NewSizePercent=20",
             "-XX:G1ReservePercent=15",
-            "-XX:G1HeapRegionSize=16M",
-            "-XX:G1MixedGCCountTarget=4",
-            "-XX:InitiatingHeapOccupancyPercent=20",
-            "-XX:+AlwaysPreTouch",
             "-XX:+DisableExplicitGC",
             "-XX:+ParallelRefProcEnabled",
-            "-XX:+UseStringDeduplication",
-
-            // ARM64 SIMD & Vector Optimizations
-            "-XX:+UseNeon",
-            "-XX:+UseCRC32Intrinsics",
             "-Dfile.encoding=UTF-8",
-            "-Djava.awt.headless=true",
-
-            // LWJGL3-Android & VeloCraft Native Bridge Paths
-            "-Djava.library.path=${nativesDir.absolutePath}",
-            "-Dorg.lwjgl.librarypath=${nativesDir.absolutePath}",
-            "-Dorg.lwjgl.opengl.libname=libmobileglues.so",
-            "-Dvelocraft.bridge.port=28465",
-            "-Dvelocraft.chunkThreads=${hw.chunkBuilderThreads}",
-
-            // Classpath & Fabric KnotClient Main Entrypoint
-            "-cp",
-            classpath,
-            "net.fabricmc.loader.impl.launch.knot.KnotClient",
-
-            // Minecraft Direct Boot Arguments
-            "--username", playerUsername,
-            "--version", "1.20.4-VeloCraft",
-            "--gameDir", gameDir.absolutePath,
-            "--assetsDir", assetsDir.absolutePath,
-            "--assetIndex", "12",
-            "--uuid", playerUuid,
-            "--accessToken", accessToken,
-            "--userType", "msa",
-            "--versionType", "VeloCraft-Direct"
+            "-Djava.awt.headless=true"
         )
+
+        if (hw.is64Bit) {
+            args.addAll(
+                listOf(
+                    "-XX:G1HeapRegionSize=16M",
+                    "-XX:+AlwaysPreTouch",
+                    "-XX:+UseStringDeduplication",
+                    "-XX:+UseNeon",
+                    "-XX:+UseCRC32Intrinsics"
+                )
+            )
+        } else {
+            // 32-bit armeabi-v7a compact heap region & stack size tuning
+            args.addAll(
+                listOf(
+                    "-XX:G1HeapRegionSize=4M",
+                    "-Xss512k"
+                )
+            )
+        }
+
+        args.addAll(
+            listOf(
+                "-Djava.library.path=${nativesDir.absolutePath}",
+                "-Dorg.lwjgl.librarypath=${nativesDir.absolutePath}",
+                "-Dorg.lwjgl.opengl.libname=${hw.recommendedRendererLib}",
+                "-Dvelocraft.bridge.port=28465",
+                "-Dvelocraft.abi=${hw.abi}",
+                "-Dvelocraft.chunkThreads=${hw.chunkBuilderThreads}",
+                "-cp",
+                classpath,
+                "net.fabricmc.loader.impl.launch.knot.KnotClient",
+                "--username", playerUsername,
+                "--version", "1.20.4-VeloCraft",
+                "--gameDir", gameDir.absolutePath,
+                "--assetsDir", assetsDir.absolutePath,
+                "--assetIndex", "12",
+                "--uuid", playerUuid,
+                "--accessToken", accessToken,
+                "--userType", "msa",
+                "--versionType", "VeloCraft-Direct-${hw.abi}"
+            )
+        )
+
+        return args.toTypedArray()
     }
 }
