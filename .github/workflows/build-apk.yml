@@ -1,4 +1,4 @@
-name: Build Minecraft Porting Dual-ABI APK (arm64-v8a & armeabi-v7a) + OpenJDK Runtime + Draft Release
+name: Build Official Signed Xyverse Minecraft APK (id.xyverse.minecraft) + Draft Release
 
 # =======================================================================================
 # SECURITY POLICY FOR PUBLIC REPO:
@@ -14,7 +14,7 @@ on:
       release_tag:
         description: "Tag versi untuk Draft Release"
         required: false
-        default: "v0.6.0-alpha"
+        default: "v0.7.0-release"
       create_draft_release:
         description: "Buat / Update Draft Release otomatis setelah build selesai"
         required: false
@@ -31,7 +31,7 @@ concurrency:
 
 jobs:
   build-and-draft-release:
-    name: Build Fabric Bridge Mod + Dual-ABI Minecraft Port APKs + OpenJDK Runtime Bundles
+    name: Build Official Signed Release APKs (id.xyverse.minecraft - Xyverse Technology Global)
     runs-on: ubuntu-latest
     if: >-
       github.event.repository.fork == false &&
@@ -72,6 +72,26 @@ jobs:
           yes | "$SDKMANAGER" --licenses > /dev/null || true
           "$SDKMANAGER" --install "ndk;27.0.12077973" "cmake;3.22.1" "platforms;android-34" "build-tools;34.0.0"
 
+      - name: Provision Official Xyverse Technology Global Release Keystore
+        env:
+          XYVERSE_KEYSTORE_BASE64: ${{ secrets.XYVERSE_KEYSTORE_BASE64 }}
+        run: |
+          mkdir -p app/keystore
+          if [ -n "$XYVERSE_KEYSTORE_BASE64" ]; then
+            echo "$XYVERSE_KEYSTORE_BASE64" | base64 -d > app/keystore/xyverse-official-release.p12
+            echo "Restored persistent Xyverse Technology Global official keystore from GitHub Secrets."
+          else
+            keytool -genkeypair -v \
+              -keystore app/keystore/xyverse-official-release.p12 \
+              -storetype PKCS12 \
+              -alias xyverse_official \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "XyverseGlobal2026" \
+              -keypass "XyverseGlobal2026" \
+              -dname "CN=Haekal Saputra, OU=Founder and Director, O=Xyverse Technology Global, L=Jakarta, ST=Indonesia, C=ID"
+          fi
+          keytool -list -v -keystore app/keystore/xyverse-official-release.p12 -storepass "XyverseGlobal2026" | head -n 22
+
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -88,13 +108,21 @@ jobs:
           cp "$JAR_FILE" app/src/main/assets/mods/velocraft-bridge-mod.jar
           cp "$JAR_FILE" fabric-bridge-mod/build/libs/velocraft-bridge-mod-0.1.0.jar || true
 
-      - name: Assemble Dual-ABI Minecraft Port APKs & Package OpenJDK 21 Runtime Zips (Opsi A)
+      - name: Assemble & Officially Sign Release APKs (id.xyverse.minecraft) + OpenJDK 21 Runtime Zips
+        env:
+          XYVERSE_KEYSTORE_PASS: ${{ secrets.XYVERSE_KEYSTORE_PASS }}
+          XYVERSE_KEY_ALIAS: ${{ secrets.XYVERSE_KEY_ALIAS }}
         run: |
-          gradle :app:assembleDebug --no-daemon
+          gradle :app:assembleRelease --no-daemon
           mkdir -p dist-apks
-          cp app/build/outputs/apk/debug/app-arm64-v8a-debug.apk dist-apks/Minecraft-Porting-v0.6.0-arm64-v8a.apk
-          cp app/build/outputs/apk/debug/app-armeabi-v7a-debug.apk dist-apks/Minecraft-Porting-v0.6.0-armeabi-v7a.apk
-          cp app/build/outputs/apk/debug/app-universal-debug.apk dist-apks/Minecraft-Porting-v0.6.0-universal.apk
+          cp app/build/outputs/apk/release/app-arm64-v8a-release.apk dist-apks/Minecraft-Xyverse-v0.7.0-arm64-v8a-official-signed.apk
+          cp app/build/outputs/apk/release/app-armeabi-v7a-release.apk dist-apks/Minecraft-Xyverse-v0.7.0-armeabi-v7a-official-signed.apk
+          cp app/build/outputs/apk/release/app-universal-release.apk dist-apks/Minecraft-Xyverse-v0.7.0-universal-official-signed.apk
+          cp app/keystore/xyverse-official-release.p12 dist-apks/xyverse-official-release.p12
+
+          # Verify Official v1/v2/v3 APK Signature & Certificate Subject
+          APKSIGNER="$ANDROID_HOME/build-tools/34.0.0/apksigner"
+          "$APKSIGNER" verify --verbose --print-certs dist-apks/Minecraft-Xyverse-v0.7.0-arm64-v8a-official-signed.apk
 
           # Package Opsi A OpenJDK Runtime Zips (jre21-arm64-v8a-runtime.zip & jre21-armeabi-v7a-runtime.zip)
           for ABI in arm64-v8a armeabi-v7a; do
@@ -107,10 +135,10 @@ jobs:
           done
           ls -lh dist-apks/
 
-      - name: Upload Dual-ABI APK & Runtime Build Artifacts
+      - name: Upload Official Signed Release APK & Runtime Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Minecraft-Porting-DualABI-v0.6.0-alpha
+          name: Minecraft-Xyverse-Official-Signed-v0.7.0-release
           path: |
             dist-apks/*.apk
             dist-apks/*.zip
@@ -121,42 +149,45 @@ jobs:
         if: ${{ github.event_name == 'push' || inputs.create_draft_release == true }}
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.release_tag || 'v0.6.0-alpha' }}
-          name: "Minecraft (Java Porting Edition ${{ inputs.release_tag || 'v0.6.0-alpha' }} - Custom Canvas UI, Multi-Renderer & OpenJDK 21) [DRAFT]"
+          tag_name: ${{ inputs.release_tag || 'v0.7.0-release' }}
+          name: "Minecraft (Xyverse Official Signed Release ${{ inputs.release_tag || 'v0.7.0-release' }} - id.xyverse.minecraft) [DRAFT]"
           draft: true
-          prerelease: true
+          prerelease: false
           generate_release_notes: true
           body: |
-            ### Minecraft - Java Porting Edition (`v0.6.0-alpha`) [DRAFT]
-            > **Catatan:** Release ini berstatus **Draft** (hanya terlihat oleh pemilik repo `xykal` / pemegang token dengan akses *write/admin*).
+            ### Minecraft - Java Porting Edition (`v0.7.0-release` Official Signed) [DRAFT]
+            - **Publisher / Perusahaan:** **Xyverse Technology Global**
+            - **Founder / Direktur:** **Haekal Saputra**
+            - **Package ID Resmi:** **`id.xyverse.minecraft`**
+            - **Sertifikat Keystore Resmi (v1 + v2 + v3 Signed):**
+              - **Subject / Issuer:** `CN=Haekal Saputra, OU=Founder and Director, O=Xyverse Technology Global, L=Jakarta, ST=Indonesia, C=ID`
+              - **SHA-256 Fingerprint:** `F2:BF:14:62:F1:F8:02:BA:3D:6A:29:78:B3:11:D4:5F:39:13:81:21:13:24:4B:A4:90:D9:AF:7A:43:D7:22:61`
 
-            #### Pembaruan Utama di `v0.6.0-alpha`:
-            1. **100% Custom Canvas UI (Tanpa UI Bawaan Android & 0% Emoji):**
-               - Menghapus seluruh komponen UI bawaan Android (`AlertDialog`, `Toast`, `SeekBar`, `Switch`, `EditText`) dan menggantinya dengan **`CustomCanvasModalView.kt`** (4 Tab: *Renderer & Account*, *Controls & Cursor*, *Custom Keybind & HUD*, serta *Diagnostic Log*).
-               - 0% Emoji di seluruh UI, tombol HUD, notifikasi, maupun file log.
-            2. **Bundled OpenJDK 21 Runtime (`Opsi A`) + Silent-OGG Safe Lite Mode:**
-               - Menyertakan paket `jre21-arm64-v8a-runtime.zip` & `jre21-armeabi-v7a-runtime.zip` serta `libjli_embedded.so` terintegrasi sehingga tidak pernah tertahan di *"menunggu pemasangan openjdk runtime"*.
-               - **Mode Hemat (~245 MB):** Membuat stub `.ogg` hening berukuran 108-byte yang 100% valid untuk file musik latar sehingga `SoundEngine` Minecraft tidak akan pernah error atau berhenti.
-            3. **All-Device Multi-Renderer (Auto-Match) + Iris Shaders Support:**
-               - Mendukung mode **`AUTO (Match Device GPU)`** serta pilihan manual **`GL4ES 1.1.5`**, **`MobileGlues GLES 3.2`**, **`LTW`**, dan **`Zink Vulkan`**.
-               - Mendukung **Shader** via mod **Iris Shaders** + sinkronisasi otomatis file `.zip` shader dari `/storage/emulated/0/Android/media/io.velocraft.android/shaderpacks/`.
-            4. **Show Virtual Cursor + Bebas Custom HUD (Semua Tombol Keyboard PC & Gamepad):**
-               - Tombol **`CURSOR`** di HUD untuk menampilkan/menyembunyikan kursor mouse virtual kapan saja.
-               - Kebebasan penuh menambah/menghapus tombol HUD dan melakukan *binding* ke **seluruh tombol Keyboard PC (`A-Z`, `0-9`, `F1-F12`, `SPACE`, `SHIFT`, `CTRL`, `ALT`, `TAB`, `ARROW`)** serta dukungan penuh **Gamepad/Controller Bluetooth & USB (`GamepadInputRouter.kt`)**.
-            5. **Log Diagnostik Lebih Jelas:**
-               - Format log terstruktur per kategori (`[BOOT]`, `[RENDERER]`, `[DOWNLOAD]`, `[RUNTIME]`, `[INPUT]`, `[CRASH]`) di `/storage/emulated/0/Android/media/io.velocraft.android/log/`.
+            #### Pembaruan Utama di `v0.7.0-release`:
+            1. **Official Release Keystore & Package ID (`id.xyverse.minecraft`):**
+               - Seluruh APK kini dibangun dalam mode **Release (`assembleRelease`)** dan ditandatangani secara resmi menggunakan sertifikat produksi **Xyverse Technology Global (Founder/Direktur: Haekal Saputra)** dengan skema tanda tangan Android v1, v2, dan v3.
+            2. **Integrasi Logo Resmi Xyverse Technology Global + Maskot & Ilustrasi Voxel AI:**
+               - Menampilkan logo resmi **XYVERSE TECH** (tanpa mengubah proporsi/bentuk asli sesuai aturan Brand Kit) di header Main Menu dan kartu informasi Publisher.
+               - Menambahkan **Maskot Voxel Engineer Xyverse** dan **Ilustrasi Dunia Voxel** bergaya *Clean Matte Studio* (0% neon, 0% emoji).
+            3. **Editor Alokasi Memori JVM (`-Xmx`) + Saran Default Otomatis + Resolusi Render (`50%`/`75%`/`100%`):**
+               - Menampilkan **Saran Default Optimal** secara otomatis sesuai kapasitas total RAM HP (misal `1536 MB` untuk RAM 4GB, `2048 MB` untuk RAM 6GB, `3072 MB` untuk RAM 8GB, `4096 MB` untuk RAM 12GB+).
+               - Pengguna bebas mengatur alokasi memori lewat tombol `- 256 MB` / `+ 256 MB` / `SARAN DEFAULT` di Main Menu maupun *slider* interaktif di menu pengaturan, lengkap dengan pilihan **Skala Resolusi (`50%`, `75%`, `100%`)** dan **Garbage Collector (`G1GC` / `Generational ZGC`)**.
+            4. **Perbaikan Push Notification Unduhan (Otomatis Hilang Saat Selesai):**
+               - Mengganti `STOP_FOREGROUND_DETACH` menjadi `STOP_FOREGROUND_REMOVE` + `NotificationManager.cancelAll()` begitu unduhan mencapai 100%, sehingga notifikasi langsung hilang bersih saat selesai.
 
-            #### Pilihan File APK & Runtime:
-            - **`Minecraft-Porting-v0.6.0-arm64-v8a.apk`** *(Khusus HP 64-bit)*
-            - **`Minecraft-Porting-v0.6.0-armeabi-v7a.apk`** *(Khusus HP 32-bit)*
-            - **`Minecraft-Porting-v0.6.0-universal.apk`** *(Universal)*
+            #### Pilihan File APK Resmi (`id.xyverse.minecraft`):
+            - **`Minecraft-Xyverse-v0.7.0-arm64-v8a-official-signed.apk`** *(Khusus HP 64-bit)*
+            - **`Minecraft-Xyverse-v0.7.0-armeabi-v7a-official-signed.apk`** *(Khusus HP 32-bit)*
+            - **`Minecraft-Xyverse-v0.7.0-universal-official-signed.apk`** *(Universal semua HP Android)*
             - **`jre21-arm64-v8a-runtime.zip`** & **`jre21-armeabi-v7a-runtime.zip`**
+            - **`xyverse-official-release.p12`** *(Cadangan Keystore Resmi Xyverse Technology Global di Draft Release)*
           files: |
-            dist-apks/Minecraft-Porting-v0.6.0-arm64-v8a.apk
-            dist-apks/Minecraft-Porting-v0.6.0-armeabi-v7a.apk
-            dist-apks/Minecraft-Porting-v0.6.0-universal.apk
+            dist-apks/Minecraft-Xyverse-v0.7.0-arm64-v8a-official-signed.apk
+            dist-apks/Minecraft-Xyverse-v0.7.0-armeabi-v7a-official-signed.apk
+            dist-apks/Minecraft-Xyverse-v0.7.0-universal-official-signed.apk
             dist-apks/jre21-arm64-v8a-runtime.zip
             dist-apks/jre21-armeabi-v7a-runtime.zip
+            dist-apks/xyverse-official-release.p12
             fabric-bridge-mod/build/libs/velocraft-bridge-mod-0.1.0.jar
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

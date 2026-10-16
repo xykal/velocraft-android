@@ -22,14 +22,14 @@ import java.util.concurrent.Executors
  * Android Foreground Service for downloading OpenJDK 21 Runtime + Minecraft 1.20.4 Engine, Libraries, Mods & Assets.
  *
  * Ensures the download continues running even when the user switches to other apps,
- * locks the screen, or minimizes the app, displaying real-time progress in the Push Notification
- * bar and optional Floating Window Overlay (Display Over Other Apps).
+ * and AUTOMATICALLY removes the Push Notification (`STOP_FOREGROUND_REMOVE` + `nm.cancel`)
+ * as soon as the download completes (`percent >= 100`) or stops.
  * Strictly zero emojis.
  */
 class EngineDownloadService : Service() {
 
     companion object {
-        private const val CHANNEL_ID = "minecraft_engine_download_channel"
+        private const val CHANNEL_ID = "xyverse_minecraft_download_channel"
         private const val NOTIFICATION_ID = 2041
         private const val EXTRA_SKIP_MUSIC_LITE = "extra_skip_music_lite"
 
@@ -52,6 +52,14 @@ class EngineDownloadService : Service() {
 
         fun removeListener(listener: (ResumableDownloadEngine.DownloadProgressState) -> Unit) {
             listeners.remove(listener)
+        }
+
+        fun dismissAllNotifications(context: Context) {
+            runCatching {
+                val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                nm.cancel(NOTIFICATION_ID)
+                nm.cancelAll()
+            }
         }
 
         fun startOrResume(context: Context, skipMusicLite: Boolean) {
@@ -83,6 +91,12 @@ class EngineDownloadService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // If engine is already 100% ready, immediately remove any lingering notification and exit
+        if (ResumableDownloadEngine.inspectEngineReadiness(this).isReadyToLaunch) {
+            dismissForegroundAndNotification()
+            return START_NOT_STICKY
+        }
+
         val skipMusic = intent?.getBooleanExtra(
             EXTRA_SKIP_MUSIC_LITE,
             ResumableDownloadEngine.isSkipMusicLiteEnabled(this)
@@ -112,26 +126,38 @@ class EngineDownloadService : Service() {
                     }
                 } finally {
                     isWorkerActive = false
-                    mainHandler.postDelayed({
-                        floatingOverlay?.dismiss()
-                        stopForeground(STOP_FOREGROUND_DETACH)
-                        stopSelf()
-                    }, 1800L)
+                    mainHandler.post {
+                        dismissForegroundAndNotification()
+                    }
                 }
             }
         }
 
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     private fun publishState(state: ResumableDownloadEngine.DownloadProgressState) {
         latestState = state
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+        if (!state.isRunning || state.percent >= 100) {
+            // Download finished or paused -> immediately remove push notification & floating overlay!
+            nm.cancel(NOTIFICATION_ID)
+            mainHandler.post {
+                floatingOverlay?.dismiss()
+                for (l in listeners) {
+                    l(state)
+                }
+                dismissForegroundAndNotification()
+            }
+            return
+        }
+
         val notif = buildNotification(
             percent = state.percent,
             title = state.phaseTitle,
             detail = state.detailText,
-            ongoing = state.isRunning
+            ongoing = true
         )
         nm.notify(NOTIFICATION_ID, notif)
 
@@ -144,6 +170,22 @@ class EngineDownloadService : Service() {
             for (l in listeners) {
                 l(state)
             }
+        }
+    }
+
+    private fun dismissForegroundAndNotification() {
+        runCatching {
+            floatingOverlay?.dismiss()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+            } else {
+                @Suppress("DEPRECATION")
+                stopForeground(true)
+            }
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.cancel(NOTIFICATION_ID)
+            nm.cancelAll()
+            stopSelf()
         }
     }
 
@@ -168,7 +210,7 @@ class EngineDownloadService : Service() {
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "Minecraft Engine & Asset Downloader",
+                "Xyverse Minecraft Engine Downloader",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
                 description = "Menampilkan progres unduhan data Minecraft Java 1.20.4 + OpenJDK 21 di latar belakang"
@@ -200,6 +242,7 @@ class EngineDownloadService : Service() {
             .setContentText(detail)
             .setContentIntent(pendingIntent)
             .setOngoing(ongoing)
+            .setAutoCancel(!ongoing)
             .setOnlyAlertOnce(true)
             .setProgress(100, percent.coerceIn(0, 100), false)
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -208,6 +251,7 @@ class EngineDownloadService : Service() {
 
     override fun onDestroy() {
         floatingOverlay?.dismiss()
+        dismissAllNotifications(this)
         super.onDestroy()
     }
 

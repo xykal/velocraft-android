@@ -18,6 +18,7 @@ captures/
 
 # Keystores & Secrets (Never commit tokens or signing keys)
 *.jks
+*.p12
 *.keystore
 keystore.properties
 .env

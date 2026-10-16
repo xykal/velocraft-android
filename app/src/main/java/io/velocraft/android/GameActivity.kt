@@ -66,6 +66,7 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
     private val downloadListener: (ResumableDownloadEngine.DownloadProgressState) -> Unit = { state ->
         mainMenuView.refreshState(state)
         if (!state.isRunning && state.percent >= 100) {
+            EngineDownloadService.dismissAllNotifications(this)
             val readiness = ResumableDownloadEngine.inspectEngineReadiness(this)
             if (readiness.isReadyToLaunch) {
                 tryLaunchJvmWhenReady()

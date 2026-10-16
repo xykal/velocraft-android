@@ -16,9 +16,9 @@ import java.util.Locale
 
 /**
  * Structured, human-readable diagnostic logger writing to:
- *   `/storage/emulated/0/Android/media/io.velocraft.android/log/latest.log`
- *   `/storage/emulated/0/Android/media/io.velocraft.android/log/crash.log`
- * Also manages `/storage/emulated/0/Android/media/io.velocraft.android/shaderpacks/`.
+ *   `/storage/emulated/0/Android/media/id.xyverse.minecraft/log/latest.log`
+ *   `/storage/emulated/0/Android/media/id.xyverse.minecraft/log/crash.log`
+ * Also manages `/storage/emulated/0/Android/media/id.xyverse.minecraft/shaderpacks/`.
  *
  * Strictly zero emojis for clean monospace log readability.
  */
@@ -75,8 +75,10 @@ object VeloLogger {
 
             val header = buildString {
                 appendLine("========================================================================")
-                appendLine("MINECRAFT JAVA PORTING EDITION (v0.6.0) - DIAGNOSTIC LOG")
+                appendLine("MINECRAFT JAVA PORTING EDITION (v0.7.0-release) - DIAGNOSTIC LOG")
                 appendLine("========================================================================")
+                appendLine("Publisher        : Xyverse Technology Global")
+                appendLine("Founder/Director : Haekal Saputra")
                 appendLine("Timestamp        : ${dateFormat.format(Date())}")
                 appendLine("Package Name     : ${context.packageName}")
                 appendLine("Log Directory    : ${activeLogDir.absolutePath}")

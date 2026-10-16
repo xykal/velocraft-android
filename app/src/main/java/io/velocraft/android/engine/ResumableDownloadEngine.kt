@@ -35,6 +35,8 @@ object ResumableDownloadEngine {
     private const val FABRIC_LOADER_META_URL =
         "https://meta.fabricmc.net/v2/versions/loader/1.20.4/0.16.9/profile/json"
     private const val GITHUB_RELEASE_RUNTIME_BASE =
+        "https://github.com/xykal/velocraft-android/releases/download/v0.7.0-release"
+    private const val GITHUB_FALLBACK_RUNTIME_BASE =
         "https://github.com/xykal/velocraft-android/releases/download/v0.6.0-alpha"
     private const val GITHUB_LATEST_RUNTIME_BASE =
         "https://github.com/xykal/velocraft-android/releases/latest/download"
@@ -160,6 +162,7 @@ object ResumableDownloadEngine {
             if (!jliLib.exists() || jliLib.length() <= 1024L) {
                 val urlsToTry = listOf(
                     "$GITHUB_RELEASE_RUNTIME_BASE/$runtimeZipName",
+                    "$GITHUB_FALLBACK_RUNTIME_BASE/$runtimeZipName",
                     "$GITHUB_LATEST_RUNTIME_BASE/$runtimeZipName"
                 )
                 for (url in urlsToTry) {

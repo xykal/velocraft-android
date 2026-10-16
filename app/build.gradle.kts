@@ -10,17 +10,33 @@ android {
     ndkVersion = project.findProperty("velocraft.ndkVersion")?.toString() ?: "27.0.12077973"
 
     defaultConfig {
-        applicationId = "io.velocraft.android"
+        applicationId = "id.xyverse.minecraft"
         minSdk = 24 // Android 7.0+ (Supports 32-bit armeabi-v7a & 64-bit arm64-v8a)
         targetSdk = 34
-        versionCode = 7
-        versionName = "0.6.0-alpha"
+        versionCode = 8
+        versionName = "0.7.0-release"
 
         externalNativeBuild {
             cmake {
                 cppFlags += listOf("-std=c++20", "-O3", "-ffast-math", "-Wall", "-fno-exceptions")
-                // Use c++_static so libvelocraft_bridge.so has ZERO external STL .so dependency issues
+                // Use c++_static so native libraries have ZERO external STL .so dependency issues
                 arguments += listOf("-DANDROID_STL=c++_static")
+            }
+        }
+    }
+
+    signingConfigs {
+        create("release") {
+            val ksFile = file("keystore/xyverse-official-release.p12")
+            if (ksFile.exists()) {
+                storeFile = ksFile
+                storeType = "PKCS12"
+                storePassword = System.getenv("XYVERSE_KEYSTORE_PASS") ?: "XyverseGlobal2026"
+                keyAlias = System.getenv("XYVERSE_KEY_ALIAS") ?: "xyverse_official"
+                keyPassword = System.getenv("XYVERSE_KEYSTORE_PASS") ?: "XyverseGlobal2026"
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
             }
         }
     }
@@ -36,15 +52,23 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = true
+            isMinifyEnabled = false
+            isShrinkResources = false
+            val ksFile = file("keystore/xyverse-official-release.p12")
+            if (ksFile.exists()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
         }
         debug {
-            isDebuggable = true
-            isJniDebuggable = true
+            val ksFile = file("keystore/xyverse-official-release.p12")
+            if (ksFile.exists()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+            isDebuggable = false
         }
     }
 
