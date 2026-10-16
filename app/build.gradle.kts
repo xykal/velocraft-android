@@ -13,8 +13,8 @@ android {
         applicationId = "id.xyverse.minecraft"
         minSdk = 24 // Android 7.0+ (Supports 32-bit armeabi-v7a & 64-bit arm64-v8a)
         targetSdk = 34
-        versionCode = 8
-        versionName = "0.7.0-release"
+        versionCode = 9
+        versionName = "0.7.1-release"
 
         externalNativeBuild {
             cmake {
@@ -100,4 +100,6 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.1")
+    implementation("org.tukaani:xz:1.9")
+    implementation("org.apache.commons:commons-compress:1.26.1")
 }

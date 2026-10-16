@@ -2,11 +2,15 @@ package io.velocraft.android.engine
 
 import android.content.Context
 import android.os.Process
+import android.system.Os
 import io.velocraft.android.util.VeloLogger
+import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import org.json.JSONArray
 import org.json.JSONObject
+import org.tukaani.xz.XZCompressorInputStream
 import java.io.BufferedInputStream
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.RandomAccessFile
 import java.net.HttpURLConnection
@@ -17,13 +21,12 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
-import java.util.zip.ZipInputStream
 
 /**
- * Resumable Multi-Threaded HTTP Range Downloader, Opsi A OpenJDK 21 Runtime Provisioner,
+ * Resumable Multi-Threaded HTTP Range Downloader, Real Android OpenJDK Runtime Provisioner,
  * and Silent-OGG Safe Lite Mode Engine.
  *
- * Strictly zero emojis.
+ * Strictly zero emojis and zero simulation fallback.
  */
 object ResumableDownloadEngine {
 
@@ -34,12 +37,13 @@ object ResumableDownloadEngine {
         "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
     private const val FABRIC_LOADER_META_URL =
         "https://meta.fabricmc.net/v2/versions/loader/1.20.4/0.16.9/profile/json"
-    private const val GITHUB_RELEASE_RUNTIME_BASE =
-        "https://github.com/xykal/velocraft-android/releases/download/v0.7.0-release"
-    private const val GITHUB_FALLBACK_RUNTIME_BASE =
-        "https://github.com/xykal/velocraft-android/releases/download/v0.6.0-alpha"
-    private const val GITHUB_LATEST_RUNTIME_BASE =
-        "https://github.com/xykal/velocraft-android/releases/latest/download"
+
+    private const val OPENJDK_ARM64_PRIMARY_URL =
+        "https://github.com/PojavLauncherTeam/android-openjdk-build-multiarch/releases/download/jre17-ec28559/jre17-arm64-20210825-release.tar.xz"
+    private const val OPENJDK_ARM32_PRIMARY_URL =
+        "https://github.com/PojavLauncherTeam/android-openjdk-build-multiarch/releases/download/jre17-ec28559/jre17-arm-20210914-release.tar.xz"
+    private const val GITHUB_RELEASE_MIRROR_BASE =
+        "https://github.com/xykal/velocraft-android/releases/download/v0.7.1-release"
 
     data class DownloadProgressState(
         val isRunning: Boolean,
@@ -74,42 +78,28 @@ object ResumableDownloadEngine {
     }
 
     /**
-     * Ensures the embedded OpenJDK JLI native library inside the APK (`libjli_embedded.so`)
-     * is linked/copied into `jre21-<abi>/lib/libjli.so` if the user has not yet extracted
-     * a remote runtime zip, so the app is never stuck waiting for OpenJDK runtime.
+     * Checks that a real, complete Android OpenJDK runtime is extracted in `provisioner.jreDir`:
+     * - `lib/libjli.so` (or `lib/jli/libjli.so`)
+     * - `lib/server/libjvm.so` (> 1 MB, real HotSpot JVM)
+     * - `lib/modules` (> 10 MB, real JRE module image)
      */
-    fun ensureEmbeddedOrExtractedJreReady(context: Context, provisioner: DirectBootProvisioner): Boolean {
+    fun isRealOpenJdkInstalled(provisioner: DirectBootProvisioner): Boolean {
         val jliPrimary = File(provisioner.jreDir, "lib/libjli.so")
         val jliAlt = File(provisioner.jreDir, "lib/jli/libjli.so")
-        if ((jliPrimary.exists() && jliPrimary.length() > 1024L) ||
-            (jliAlt.exists() && jliAlt.length() > 1024L)
-        ) {
-            return true
-        }
+        val libJvm = File(provisioner.jreDir, "lib/server/libjvm.so")
+        val libModules = File(provisioner.jreDir, "lib/modules")
 
-        return try {
-            val nativeDir = File(context.applicationInfo.nativeLibraryDir)
-            val embeddedJli = File(nativeDir, "libjli_embedded.so")
-            if (embeddedJli.exists() && embeddedJli.length() > 1024L) {
-                jliPrimary.parentFile?.mkdirs()
-                embeddedJli.copyTo(jliPrimary, overwrite = true)
-                VeloLogger.section(
-                    "RUNTIME",
-                    "Installed bundled OpenJDK 21 JLI runtime (${jliPrimary.length()} bytes) -> ${jliPrimary.absolutePath}"
-                )
-                true
-            } else {
-                false
-            }
-        } catch (t: Throwable) {
-            VeloLogger.warn("ensureEmbeddedOrExtractedJreReady warning: ${t.message}")
-            false
-        }
+        val hasJli = (jliPrimary.exists() && jliPrimary.length() > 10_000L) ||
+            (jliAlt.exists() && jliAlt.length() > 10_000L)
+        val hasJvm = libJvm.exists() && libJvm.length() > 1_000_000L
+        val hasModules = libModules.exists() && libModules.length() > 10_000_000L
+
+        return hasJli && hasJvm && hasModules
     }
 
     fun inspectEngineReadiness(context: Context): EngineReadiness {
         val provisioner = DirectBootProvisioner(context)
-        val jreReady = ensureEmbeddedOrExtractedJreReady(context, provisioner)
+        val jreReady = isRealOpenJdkInstalled(provisioner)
 
         val clientJar = File(
             provisioner.librariesDir,
@@ -140,40 +130,84 @@ object ResumableDownloadEngine {
     ) {
         val provisioner = DirectBootProvisioner(context)
         provisioner.prepareDirectoriesAndConfigs(includeFullMusicAssets = !skipMusicLite)
-        val activeAbi = if (Process.is64Bit()) "arm64-v8a" else "armeabi-v7a"
+        val is64 = Process.is64Bit()
+        val activeAbi = if (is64) "arm64-v8a" else "armeabi-v7a"
 
         try {
             // =========================================================================
-            // STEP 0: Opsi A OpenJDK 21 Runtime Bundle (`jre21-<abi>-runtime.zip`)
+            // STEP 0: Real Android OpenJDK Runtime (`libjli.so` + `libjvm.so` + `modules`)
             // =========================================================================
-            onProgress(
-                DownloadProgressState(
-                    isRunning = true,
-                    percent = 2,
-                    phaseTitle = "Menyiapkan OpenJDK 21 Runtime ($activeAbi)",
-                    detailText = "Memeriksa paket OpenJDK 21 & Native Bridge..."
+            if (!isRealOpenJdkInstalled(provisioner)) {
+                onProgress(
+                    DownloadProgressState(
+                        isRunning = true,
+                        percent = 2,
+                        phaseTitle = "Mengunduh OpenJDK Runtime ($activeAbi)",
+                        detailText = "Mengunduh arsip OpenJDK HotSpot Android (~36 MB, Resumable)..."
+                    )
                 )
-            )
 
-            val runtimeZipName = "jre21-$activeAbi-runtime.zip"
-            val runtimeZipFile = File(provisioner.rootEngineDir, runtimeZipName)
-            val jliLib = File(provisioner.jreDir, "lib/libjli.so")
+                val tarXzFile = File(provisioner.rootEngineDir, "openjdk-$activeAbi.tar.xz")
+                val candidateUrls = if (is64) {
+                    listOf(
+                        OPENJDK_ARM64_PRIMARY_URL,
+                        "$GITHUB_RELEASE_MIRROR_BASE/jre-arm64-v8a-openjdk.tar.xz"
+                    )
+                } else {
+                    listOf(
+                        OPENJDK_ARM32_PRIMARY_URL,
+                        "$GITHUB_RELEASE_MIRROR_BASE/jre-armeabi-v7a-openjdk.tar.xz"
+                    )
+                }
 
-            if (!jliLib.exists() || jliLib.length() <= 1024L) {
-                val urlsToTry = listOf(
-                    "$GITHUB_RELEASE_RUNTIME_BASE/$runtimeZipName",
-                    "$GITHUB_FALLBACK_RUNTIME_BASE/$runtimeZipName",
-                    "$GITHUB_LATEST_RUNTIME_BASE/$runtimeZipName"
-                )
-                for (url in urlsToTry) {
-                    if (tryDownloadOptionalFile(url, runtimeZipFile)) {
-                        extractZipToDir(runtimeZipFile, provisioner.jreDir)
-                        runtimeZipFile.delete()
-                        VeloLogger.section("RUNTIME", "Extracted $runtimeZipName from GitHub Release into ${provisioner.jreDir.absolutePath}")
-                        break
+                var downloadedRuntime = false
+                for (url in candidateUrls) {
+                    try {
+                        downloadFileResumable(
+                            urlStr = url,
+                            targetFile = tarXzFile,
+                            expectedSize = -1L,
+                            expectedSha1 = ""
+                        )
+                        if (tarXzFile.exists() && tarXzFile.length() > 15_000_000L) {
+                            downloadedRuntime = true
+                            break
+                        }
+                    } catch (e: Throwable) {
+                        VeloLogger.warn("Runtime mirror failed ($url): ${e.message}")
                     }
                 }
-                ensureEmbeddedOrExtractedJreReady(context, provisioner)
+
+                require(downloadedRuntime) {
+                    "Gagal mengunduh OpenJDK Runtime ($activeAbi). Periksa koneksi internet."
+                }
+
+                onProgress(
+                    DownloadProgressState(
+                        isRunning = true,
+                        percent = 5,
+                        phaseTitle = "Mengekstrak OpenJDK Runtime ($activeAbi)",
+                        detailText = "Mengekstrak libjli.so, libjvm.so, dan modul JRE ke ruang internal..."
+                    )
+                )
+
+                extractTarXzRuntime(tarXzFile, provisioner.jreDir) { extractedCount, currentEntry ->
+                    if (extractedCount % 25 == 0) {
+                        onProgress(
+                            DownloadProgressState(
+                                isRunning = true,
+                                percent = 6,
+                                phaseTitle = "Mengekstrak OpenJDK Runtime ($extractedCount berkas)",
+                                detailText = currentEntry
+                            )
+                        )
+                    }
+                }
+                tarXzFile.delete()
+                VeloLogger.section(
+                    "RUNTIME",
+                    "Extracted real Android OpenJDK runtime into ${provisioner.jreDir.absolutePath} (verified=${isRealOpenJdkInstalled(provisioner)})"
+                )
             }
 
             // =========================================================================
@@ -182,7 +216,7 @@ object ResumableDownloadEngine {
             onProgress(
                 DownloadProgressState(
                     isRunning = true,
-                    percent = 6,
+                    percent = 8,
                     phaseTitle = "Mengambil Manifest Mojang 1.20.4",
                     detailText = "Menghubungi piston-meta.mojang.com..."
                 )
@@ -394,8 +428,8 @@ object ResumableDownloadEngine {
                 DownloadProgressState(
                     isRunning = false,
                     percent = 100,
-                    phaseTitle = "Seluruh File Engine & OpenJDK 21 Siap!",
-                    detailText = "Minecraft 1.20.4 + Fabric + Mods + OpenJDK 21 telah diverifikasi."
+                    phaseTitle = "Seluruh File Engine & OpenJDK Runtime Siap!",
+                    detailText = "Minecraft 1.20.4 + Fabric + Mods + OpenJDK HotSpot telah diverifikasi."
                 )
             )
         } catch (t: Throwable) {
@@ -412,6 +446,77 @@ object ResumableDownloadEngine {
     }
 
     /**
+     * Extracts a `.tar.xz` Android OpenJDK archive into `destDir`, preserving executable bits
+     * and symlinks on Android internal storage.
+     */
+    private fun extractTarXzRuntime(
+        tarXzFile: File,
+        destDir: File,
+        onEntryExtracted: (Int, String) -> Unit
+    ) {
+        destDir.mkdirs()
+        var count = 0
+        FileInputStream(tarXzFile).use { fis ->
+            BufferedInputStream(fis, 64 * 1024).use { bis ->
+                XZCompressorInputStream(bis).use { xzis ->
+                    TarArchiveInputStream(xzis).use { tis ->
+                        while (true) {
+                            val entry = tis.nextTarEntry ?: break
+                            val cleanName = entry.name.removePrefix("./").removePrefix("/")
+                            if (cleanName.isEmpty()) continue
+
+                            val outFile = File(destDir, cleanName)
+                            if (!outFile.canonicalPath.startsWith(destDir.canonicalPath)) {
+                                continue
+                            }
+
+                            if (entry.isDirectory) {
+                                outFile.mkdirs()
+                            } else if (entry.isSymbolicLink) {
+                                outFile.parentFile?.mkdirs()
+                                try {
+                                    if (outFile.exists()) outFile.delete()
+                                    Os.symlink(entry.linkName, outFile.absolutePath)
+                                } catch (_: Throwable) {
+                                }
+                            } else {
+                                outFile.parentFile?.mkdirs()
+                                FileOutputStream(outFile).use { out ->
+                                    val buf = ByteArray(32 * 1024)
+                                    while (true) {
+                                        val r = tis.read(buf)
+                                        if (r <= 0) break
+                                        out.write(buf, 0, r)
+                                    }
+                                }
+                                if (outFile.name.endsWith(".so") || outFile.parentFile?.name == "bin") {
+                                    outFile.setExecutable(true, false)
+                                    outFile.setReadable(true, false)
+                                }
+                                count++
+                                onEntryExtracted(count, cleanName)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Ensure lib/jli/libjli.so and lib/libjli.so both exist for any dlopen path
+        val jliRoot = File(destDir, "lib/libjli.so")
+        val jliSub = File(destDir, "lib/jli/libjli.so")
+        if (jliRoot.exists() && !jliSub.exists()) {
+            jliSub.parentFile?.mkdirs()
+            jliRoot.copyTo(jliSub, overwrite = true)
+            jliSub.setExecutable(true, false)
+        } else if (jliSub.exists() && !jliRoot.exists()) {
+            jliRoot.parentFile?.mkdirs()
+            jliSub.copyTo(jliRoot, overwrite = true)
+            jliRoot.setExecutable(true, false)
+        }
+    }
+
+    /**
      * Generates a valid 108-byte minimal OGG container header with 0 PCM samples so that
      * when Lite Mode skips ~440 MB of background music/records, Minecraft's SoundEngine
      * opens the asset hash cleanly without ever throwing FileNotFoundException or stopping.
@@ -420,31 +525,19 @@ object ResumableDownloadEngine {
         if (targetFile.exists() && targetFile.length() >= 58L) return
         targetFile.parentFile?.mkdirs()
         val oggStubBytes = byteArrayOf(
-            // OggS capture pattern + version 0 + header_type 0x02 (BOS)
             0x4F, 0x67, 0x67, 0x53, 0x00, 0x02,
-            // granule_position (8 bytes = 0)
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            // bitstream_serial_number (4 bytes)
             0x01, 0x00, 0x00, 0x00,
-            // page_sequence_number (4 bytes = 0)
             0x00, 0x00, 0x00, 0x00,
-            // CRC_checksum (4 bytes)
             0x00, 0x00, 0x00, 0x00,
-            // page_segments = 1, segment_table[0] = 30 bytes (Vorbis ID header)
             0x01, 0x1E,
-            // Packet type 0x01 + "vorbis"
             0x01, 0x76, 0x6F, 0x72, 0x62, 0x69, 0x73,
-            // vorbis_version = 0 (4 bytes)
             0x00, 0x00, 0x00, 0x00,
-            // audio_channels = 1 (mono), sample_rate = 44100 Hz (0x0000AC44)
             0x01, 0x44, 0xAC.toByte(), 0x00, 0x00,
-            // bitrate_maximum = 0, bitrate_nominal = 64000, bitrate_minimum = 0
             0x00, 0x00, 0x00, 0x00,
             0x00, 0xFA.toByte(), 0x00, 0x00,
             0x00, 0x00, 0x00, 0x00,
-            // blocksize_0 = 8 (256), blocksize_1 = 11 (2048), framing_flag = 1
             0xB8.toByte(), 0x01,
-            // Second OggS EOS page (50 bytes)
             0x4F, 0x67, 0x67, 0x53, 0x00, 0x04,
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             0x01, 0x00, 0x00, 0x00,
@@ -510,7 +603,7 @@ object ResumableDownloadEngine {
             connectTimeout = 15_000
             readTimeout = 30_000
             instanceFollowRedirects = true
-            setRequestProperty("User-Agent", "Minecraft-Java-Porting-Android/0.6.0")
+            setRequestProperty("User-Agent", "Minecraft-Java-Porting-Android/0.7.1")
             if (existingBytes > 0L) {
                 setRequestProperty("Range", "bytes=$existingBytes-")
             }
@@ -559,58 +652,12 @@ object ResumableDownloadEngine {
         partFile.renameTo(targetFile)
     }
 
-    private fun tryDownloadOptionalFile(urlStr: String, destFile: File): Boolean {
-        return try {
-            val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
-                connectTimeout = 8_000
-                readTimeout = 20_000
-                instanceFollowRedirects = true
-                setRequestProperty("User-Agent", "Minecraft-Java-Porting-Android/0.6.0")
-            }
-            if (conn.responseCode != HttpURLConnection.HTTP_OK) return false
-            destFile.parentFile?.mkdirs()
-            conn.inputStream.use { input ->
-                FileOutputStream(destFile).use { output ->
-                    input.copyTo(output)
-                }
-            }
-            destFile.exists() && destFile.length() > 1024L
-        } catch (_: Throwable) {
-            false
-        }
-    }
-
-    private fun extractZipToDir(zipFile: File, destDir: File) {
-        destDir.mkdirs()
-        ZipInputStream(BufferedInputStream(zipFile.inputStream())).use { zis ->
-            while (true) {
-                val entry = zis.nextEntry ?: break
-                val outFile = File(destDir, entry.name)
-                if (!outFile.canonicalPath.startsWith(destDir.canonicalPath)) {
-                    continue
-                }
-                if (entry.isDirectory) {
-                    outFile.mkdirs()
-                } else {
-                    outFile.parentFile?.mkdirs()
-                    FileOutputStream(outFile).use { out ->
-                        zis.copyTo(out)
-                    }
-                    if (outFile.name.endsWith(".so") || outFile.parentFile?.name == "bin") {
-                        outFile.setExecutable(true, false)
-                    }
-                }
-                zis.closeEntry()
-            }
-        }
-    }
-
     private fun fetchUrlText(urlStr: String): String {
         val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
             connectTimeout = 15_000
             readTimeout = 25_000
             instanceFollowRedirects = true
-            setRequestProperty("User-Agent", "Minecraft-Java-Porting-Android/0.6.0")
+            setRequestProperty("User-Agent", "Minecraft-Java-Porting-Android/0.7.1")
         }
         return conn.inputStream.bufferedReader().use { it.readText() }
     }

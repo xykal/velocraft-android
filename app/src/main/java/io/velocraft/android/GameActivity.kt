@@ -23,6 +23,7 @@ import io.velocraft.android.controls.CustomCanvasModalView
 import io.velocraft.android.controls.GamepadInputRouter
 import io.velocraft.android.controls.GyroAimController
 import io.velocraft.android.controls.ProHudOverlayView
+import io.velocraft.android.engine.BootLogOverlayView
 import io.velocraft.android.engine.DirectBootProvisioner
 import io.velocraft.android.engine.EngineDownloadService
 import io.velocraft.android.engine.FloatingDownloadOverlay
@@ -40,19 +41,21 @@ import java.io.File
 /**
  * Minecraft (Java Porting Edition) Main Console & Direct Game Activity.
  *
- * 100% Custom Canvas UI (Zero stock Android Toast/AlertDialog/SeekBar/Switch, Zero Emojis):
- * 1. MainMenuView: Validates OpenJDK 21 Runtime (Opsi A bundled zip), Minecraft 1.20.4 Client JAR,
- *    Modrinth Optimization + Iris Shaders stack, and Mojang Asset Index 12.json (with Silent-OGG Lite Mode).
- * 2. ProHudOverlayView: Multi-touch PvP HUD with Toggleable Virtual Mouse Cursor ("CURSOR") & HUD Editor.
- * 3. CustomCanvasModalView: Multi-Renderer selector (AUTO / GL4ES / MobileGlues / LTW / Zink Vulkan),
- *    Shader toggle, custom on-canvas username keyboard, full PC keyboard/gamepad binder, and latest.log viewer.
- * 4. GamepadInputRouter: Full Bluetooth/USB Controller & External Keyboard routing.
+ * 100% Custom Canvas UI (Zero stock Android Toast/AlertDialog/SeekBar/Switch, Zero Emojis, Zero Simulation):
+ * 1. MainMenuView: 6-Page Studio Launcher Console with Left Sidebar (Beranda, Memori & Engine,
+ *    Mods & Shader, Kontrol & HUD, Akun Pemain, Log Diagnostik).
+ * 2. BootLogOverlayView: Live Boot Terminal & Stage Progress Overlay shown while OpenJDK HotSpot
+ *    (`libjli.so` / `libjvm.so`) and Fabric Loader (`KnotClient`) boot, streaming real-time native
+ *    `stdout`/`stderr` and `latest.log` lines so the screen is never blank while booting.
+ * 3. ProHudOverlayView: Multi-touch PvP HUD with Toggleable Virtual Mouse Cursor ("CURSOR") & Visual HUD Editor.
+ * 4. CustomCanvasModalView: In-game 4-tab modal for Renderer/Shader/Account/Keybind/Logs.
  */
 class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
     private val activityScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private lateinit var gameSurfaceView: SurfaceView
     private lateinit var mainMenuView: MainMenuView
+    private lateinit var bootLogOverlay: BootLogOverlayView
     private lateinit var proHudOverlay: ProHudOverlayView
     private lateinit var customModalView: CustomCanvasModalView
     private lateinit var gyroController: GyroAimController
@@ -67,16 +70,13 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
         mainMenuView.refreshState(state)
         if (!state.isRunning && state.percent >= 100) {
             EngineDownloadService.dismissAllNotifications(this)
-            val readiness = ResumableDownloadEngine.inspectEngineReadiness(this)
-            if (readiness.isReadyToLaunch) {
-                tryLaunchJvmWhenReady()
-            }
+            mainMenuView.showBannerMessage("Seluruh berkas Engine & OpenJDK selesai diunduh. Ketuk MAIN SEKARANG.")
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        VeloLogger.section("BOOT", "GameActivity.onCreate() started (v0.6.0-alpha All-Renderer + Custom HUD & Cursor)")
+        VeloLogger.section("BOOT", "GameActivity.onCreate() started (v0.7.1-release Real OpenJDK + Live Boot Console)")
 
         val hw = JvmOptimizer.detectHardware(this)
         val effectiveRenderer = RendererProfileManager.resolveEffectiveBackend(this)
@@ -112,17 +112,38 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
             onOpenKeybindEditorRequested = { selectedBtn ->
                 customModalView.openOnTab(CustomCanvasModalView.Tab.KEYBIND_CREATOR, selectedBtn)
             }
+            onExitHudEditor = {
+                if (!jvmStarted) {
+                    visibility = View.GONE
+                    mainMenuView.visibility = View.VISIBLE
+                    mainMenuView.showBannerMessage("Tata letak HUD disimpan.")
+                }
+            }
         }
 
-        // 4. Physical Gamepad & External Keyboard Router
+        // 4. Live Boot Console Overlay (prevents blank black screen during JVM/Fabric startup)
+        bootLogOverlay = BootLogOverlayView(
+            context = this,
+            onReturnToLauncher = {
+                mainMenuView.visibility = View.VISIBLE
+                mainMenuView.refreshState()
+            }
+        ).apply {
+            visibility = View.GONE
+        }
+
+        // 5. Physical Gamepad & External Keyboard Router
         gamepadRouter = GamepadInputRouter(proHudOverlay)
 
-        // 5. Clean Matte Non-Neon Main Menu & Readiness Validator Console
+        // 6. Clean Matte Non-Neon 6-Page Studio Launcher Console
         mainMenuView = MainMenuView(this).apply {
             onStartOrResumeDownload = { skipMusicLite ->
                 requestPostNotificationsPermissionIfNeeded()
                 EngineDownloadService.startOrResume(this@GameActivity, skipMusicLite)
-                showBannerMessage("Unduhan berjalan di latar belakang. Cek progres di bar atas.")
+                showBannerMessage("Unduhan berjalan di latar belakang. Notifikasi otomatis hilang saat selesai.")
+            }
+            onLaunchGameRequested = {
+                tryLaunchJvmWhenReady()
             }
             onRequestOverlayPermission = {
                 if (!FloatingDownloadOverlay.canDrawOverlays(this@GameActivity)) {
@@ -131,15 +152,20 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
                     showBannerMessage("Izin Tampil di Atas Aplikasi Lain sudah aktif.")
                 }
             }
+            onOpenVisualHudEditor = {
+                mainMenuView.visibility = View.GONE
+                proHudOverlay.visibility = View.VISIBLE
+                proHudOverlay.enterVisualEditMode()
+            }
             onOpenQuickSettings = {
-                customModalView.openOnTab(CustomCanvasModalView.Tab.RENDERER_ACCOUNT)
+                customModalView.openOnTab(CustomCanvasModalView.Tab.CONTROLS_CURSOR)
             }
             onOpenRendererAndKeybindModal = {
-                customModalView.openOnTab(CustomCanvasModalView.Tab.RENDERER_ACCOUNT)
+                customModalView.openOnTab(CustomCanvasModalView.Tab.KEYBIND_CREATOR)
             }
         }
 
-        // 6. 100% Custom Canvas Settings, Renderer Picker, Keybind Creator & Log Viewer Modal
+        // 7. 100% Custom Canvas Settings, Renderer Picker, Keybind Creator & Log Viewer Modal
         customModalView = CustomCanvasModalView(
             context = this,
             hudView = proHudOverlay,
@@ -163,6 +189,13 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
         )
         rootContainer.addView(
             proHudOverlay,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        )
+        rootContainer.addView(
+            bootLogOverlay,
             FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT
@@ -238,12 +271,7 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
         val frame = holder.surfaceFrame
         VeloLogger.section("RENDERER", "SurfaceView surfaceCreated (${frame.width()}x${frame.height()}).")
         NativeEngineBridge.setSurface(holder.surface, frame.width(), frame.height())
-
-        val readiness = ResumableDownloadEngine.inspectEngineReadiness(this)
         mainMenuView.refreshState()
-        if (readiness.isReadyToLaunch) {
-            tryLaunchJvmWhenReady()
-        }
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
@@ -255,7 +283,6 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
     }
 
     private fun tryLaunchJvmWhenReady() {
-        if (jvmStarted) return
         val readiness = ResumableDownloadEngine.inspectEngineReadiness(this)
         if (!readiness.isReadyToLaunch) {
             VeloLogger.section(
@@ -264,48 +291,76 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
                     "ClientJar=${readiness.isClientJarReady}, Mods=${readiness.installedModsCount}, " +
                     "Assets=${readiness.isAssetIndexReady}"
             )
+            mainMenuView.showBannerMessage("Berkas Engine/OpenJDK belum lengkap. Ketuk UNDUH / LANJUTKAN terlebih dahulu.")
+            return
+        }
+
+        if (jvmStarted) {
+            mainMenuView.visibility = View.GONE
+            proHudOverlay.visibility = View.VISIBLE
+            bootLogOverlay.startBootMonitoring()
             return
         }
 
         val jliPrimary = File(provisioner.jreDir, "lib/libjli.so")
         val jliAlt = File(provisioner.jreDir, "lib/jli/libjli.so")
         val jliLib = when {
-            jliPrimary.exists() && jliPrimary.length() > 1024L -> jliPrimary
-            jliAlt.exists() && jliAlt.length() > 1024L -> jliAlt
+            jliPrimary.exists() && jliPrimary.length() > 10_000L -> jliPrimary
+            jliAlt.exists() && jliAlt.length() > 10_000L -> jliAlt
             else -> null
         }
 
         if (jliLib == null) {
             VeloLogger.section("RUNTIME", "libjli.so not found inside ${provisioner.jreDir.absolutePath}")
-            mainMenuView.showBannerMessage("Paket OpenJDK 21 belum terpasang. Ketuk tombol UNDUH / LANJUTKAN.")
+            mainMenuView.showBannerMessage("OpenJDK Runtime belum terpasang lengkap. Ketuk tombol UNDUH / LANJUTKAN.")
             return
         }
 
-        // Sync any external shaderpacks before launching JVM
-        val syncedShaders = RendererProfileManager.syncExternalShaderpacks(this, provisioner.gameDir)
+        val hw = JvmOptimizer.detectHardware(this)
         val effectiveRenderer = RendererProfileManager.resolveEffectiveBackend(this)
-
-        VeloLogger.section(
-            "RUNTIME",
-            "All components verified (libjli.so=${jliLib.length()} bytes, Renderer=${effectiveRenderer.displayName}, " +
-                "SyncedShaders=$syncedShaders). Switching to In-Game Surface + HUD."
-        )
+        val resScale = JvmOptimizer.getResolutionScalePercent(this)
+        val summaryLine =
+            "RAM Heap: ${hw.allocatedHeapMb} MB | Renderer: ${effectiveRenderer.displayName} | Skala: $resScale% | ABI: ${hw.abi}"
 
         jvmStarted = true
         runOnUiThread {
             mainMenuView.visibility = View.GONE
             proHudOverlay.visibility = View.VISIBLE
             proHudOverlay.activeRendererLabel = effectiveRenderer.id.uppercase()
+            bootLogOverlay.startBootMonitoring()
+            bootLogOverlay.updateBootStage(
+                title = "TAHAP 1/5: Menyiapkan Direktori Game, Mod Stack & Shaderpack...",
+                progress = 20,
+                summary = summaryLine
+            )
             proHudOverlay.postInvalidateOnAnimation()
         }
 
         Thread({
             try {
+                val syncedShaders = RendererProfileManager.syncExternalShaderpacks(this, provisioner.gameDir)
+                VeloLogger.section(
+                    "STAGE-1",
+                    "Directories & Shaderpacks verified (SyncedShaders=$syncedShaders, ModsActive=${readiness.installedModsCount})."
+                )
+
+                bootLogOverlay.updateBootStage(
+                    title = "TAHAP 2/5: Mengatur Variabel Lingkungan OpenJDK & Renderer (${effectiveRenderer.id})...",
+                    progress = 40
+                )
                 NativeEngineBridge.configureRendererEnv(
                     jreHomePath = provisioner.jreDir.absolutePath,
                     rendererLibName = effectiveRenderer.nativeLibName,
                     cacheDirPath = cacheDir.absolutePath
                 )
+
+                bootLogOverlay.updateBootStage(
+                    title = "TAHAP 3/5: Merakit Classpath JAR Minecraft 1.20.4 & Fabric 0.16.9...",
+                    progress = 60
+                )
+                val classpath = buildClasspathString(provisioner.librariesDir)
+                val jarCount = classpath.split(File.pathSeparator).count { it.isNotBlank() }
+                VeloLogger.section("STAGE-3", "Assembled Classpath with $jarCount JAR libraries.")
 
                 val session = PlayerSessionManager(this@GameActivity).getActiveSession()
                 val jvmArgs = JvmOptimizer.buildDirectBootJvmArgs(
@@ -313,20 +368,33 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
                     gameDir = provisioner.gameDir,
                     assetsDir = provisioner.assetsDir,
                     nativesDir = provisioner.nativesDir,
-                    classpath = buildClasspathString(provisioner.librariesDir),
+                    classpath = classpath,
                     playerUsername = session.username,
                     playerUuid = session.uuid,
                     accessToken = session.accessToken
                 )
 
+                bootLogOverlay.updateBootStage(
+                    title = "TAHAP 4/5: Memuat OpenJDK HotSpot (libjli.so & libjvm.so)...",
+                    progress = 80
+                )
                 VeloLogger.section(
-                    "RUNTIME",
+                    "STAGE-4",
                     "Booting KnotClient for '${session.username}' with ${jvmArgs.size} JVM args and renderer ${effectiveRenderer.id}"
+                )
+
+                bootLogOverlay.updateBootStage(
+                    title = "TAHAP 5/5: Menjalankan Fabric Loader KnotClient (Minecraft 1.20.4)...",
+                    progress = 95
                 )
                 val exitCode = NativeEngineBridge.launchDirectJvm(jliLib.absolutePath, jvmArgs)
                 VeloLogger.section("RUNTIME", "JVM exited with code: $exitCode")
+                jvmStarted = false
+                bootLogOverlay.notifyJvmFinished(exitCode)
             } catch (t: Throwable) {
+                jvmStarted = false
                 VeloLogger.error("Error in VeloCraft-JVM-Main thread", t)
+                bootLogOverlay.notifyJvmFinished(-99)
             }
         }, "VeloCraft-JVM-Main").apply {
             priority = Thread.MAX_PRIORITY

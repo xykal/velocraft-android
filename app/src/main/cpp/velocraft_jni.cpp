@@ -6,10 +6,12 @@
 #include <sched.h>
 #include <unistd.h>
 #include <cstdlib>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <string>
 #include <vector>
+#include <atomic>
 
 #include "lwjgl_input_bridge.h"
 
@@ -29,20 +31,21 @@ namespace {
 
 using namespace velocraft::input;
 
-// Global lock-free input queue read by LWJGL/GLFW hook and written by Android UI/Gyro threads
 LockFreeInputQueue<2048> g_inputQueue;
 
-// Native window handle for EGL / MobileGlues / Vulkan surface creation
 std::atomic<ANativeWindow*> g_nativeWindow{nullptr};
 std::atomic<int32_t> g_surfaceWidth{1920};
 std::atomic<int32_t> g_surfaceHeight{1080};
-std::atomic<bool> g_cursorGrabbed{true}; // True when in-game (crosshair), False when in GUI (Inventory/Chest)
+std::atomic<bool> g_cursorGrabbed{true};
 
-// Current virtual cursor coordinates
 std::atomic<float> g_cursorX{960.0f};
 std::atomic<float> g_cursorY{540.0f};
 
-// Function pointer type for OpenJDK JLI_Launch
+std::string g_jreHomePath;
+std::string g_logFilePath;
+std::atomic<bool> g_stdioRedirected{false};
+int g_stdioPipe[2] = {-1, -1};
+
 using JLI_Launch_t = int (*)(
     int argc, char** argv,
     int jargc, const char** jargv,
@@ -57,10 +60,59 @@ using JLI_Launch_t = int (*)(
     jint ergo
 );
 
-/**
- * Pins the calling thread (Minecraft Render Thread) to the highest-frequency ARM64 performance cores
- * (big.LITTLE / Prime cores) to minimize frame time spikes and GC jitter.
- */
+void appendNativeLineToLogFile(const char* prefix, const std::string& line) {
+    LOGI("[%s] %s", prefix, line.c_str());
+    if (g_logFilePath.empty()) return;
+    FILE* f = std::fopen(g_logFilePath.c_str(), "a");
+    if (f) {
+        std::fprintf(f, "[NATIVE-%s] %s\n", prefix, line.c_str());
+        std::fflush(f);
+        std::fclose(f);
+    }
+}
+
+void* stdioPipeReaderThread(void* /*arg*/) {
+    char buf[1024];
+    std::string lineBuffer;
+    ssize_t n = 0;
+    while ((n = read(g_stdioPipe[0], buf, sizeof(buf) - 1)) > 0) {
+        buf[n] = '\0';
+        for (ssize_t i = 0; i < n; ++i) {
+            char c = buf[i];
+            if (c == '\n') {
+                if (!lineBuffer.empty()) {
+                    appendNativeLineToLogFile("JVM-OUT", lineBuffer);
+                    lineBuffer.clear();
+                }
+            } else if (c != '\r') {
+                lineBuffer.push_back(c);
+            }
+        }
+    }
+    if (!lineBuffer.empty()) {
+        appendNativeLineToLogFile("JVM-OUT", lineBuffer);
+    }
+    return nullptr;
+}
+
+void ensureStdioRedirectedToLog() {
+    bool expected = false;
+    if (!g_stdioRedirected.compare_exchange_strong(expected, true)) {
+        return;
+    }
+    if (pipe(g_stdioPipe) == 0) {
+        setvbuf(stdout, nullptr, _IOLBF, 0);
+        setvbuf(stderr, nullptr, _IONBF, 0);
+        dup2(g_stdioPipe[1], STDOUT_FILENO);
+        dup2(g_stdioPipe[1], STDERR_FILENO);
+
+        pthread_t tid;
+        pthread_create(&tid, nullptr, stdioPipeReaderThread, nullptr);
+        pthread_detach(tid);
+        appendNativeLineToLogFile("BOOT", "Redirected native stdout/stderr pipe to latest.log and Boot Console.");
+    }
+}
+
 void pinThreadToPerformanceCores() {
     const int numCores = sysconf(_SC_NPROCESSORS_CONF);
     if (numCores <= 4) return;
@@ -85,7 +137,6 @@ void pinThreadToPerformanceCores() {
     CPU_ZERO(&cpuset);
     int pinnedCount = 0;
 
-    // Select cores running within 80% of peak frequency (Performance + Prime cluster)
     const int threshold = static_cast<int>(highestFreq * 0.78);
     for (int i = 0; i < numCores; ++i) {
         if (maxFreqs[i] >= threshold) {
@@ -96,14 +147,16 @@ void pinThreadToPerformanceCores() {
 
     if (pinnedCount >= 2) {
         if (sched_setaffinity(0, sizeof(cpu_set_t), &cpuset) == 0) {
-            LOGI("Pinned Minecraft Render Thread to %d big/prime CPU cores (peak %d kHz)", pinnedCount, highestFreq);
+            appendNativeLineToLogFile(
+                "CPU",
+                "Pinned JVM Render Thread to " + std::to_string(pinnedCount) + " performance CPU cores."
+            );
         }
     }
 }
 
 } // anonymous namespace
 
-// Exported C symbols so patched LWJGL3-Android / GLFW library can poll events directly without JNI overhead
 extern "C" {
 
 __attribute__((visibility("default")))
@@ -123,10 +176,6 @@ void velocraft_get_cursor_pos(float* outX, float* outY) {
     if (outY) *outY = g_cursorY.load(std::memory_order_relaxed);
 }
 
-// =========================================================================================
-// JNI Bridge Methods called from io.velocraft.android.bridge.NativeEngineBridge
-// =========================================================================================
-
 JNIEXPORT void JNICALL
 Java_io_velocraft_android_bridge_NativeEngineBridge_nativeSetSurface(
     JNIEnv* env, jobject /*thiz*/, jobject surface, jint width, jint height
@@ -143,7 +192,7 @@ Java_io_velocraft_android_bridge_NativeEngineBridge_nativeSetSurface(
         g_surfaceHeight.store(height, std::memory_order_relaxed);
         g_cursorX.store(width * 0.5f, std::memory_order_relaxed);
         g_cursorY.store(height * 0.5f, std::memory_order_relaxed);
-        LOGI("Bound ANativeWindow (%dx%d) for Direct OpenGL ES 3.2 / Vulkan rendering", width, height);
+        LOGI("Bound ANativeWindow (%dx%d) for Direct OpenGL ES / Vulkan rendering", width, height);
     }
 }
 
@@ -175,7 +224,6 @@ JNIEXPORT void JNICALL
 Java_io_velocraft_android_bridge_NativeEngineBridge_nativeSendCameraDelta(
     JNIEnv* /*env*/, jobject /*thiz*/, jfloat deltaX, jfloat deltaY
 ) {
-    // Update accumulated cursor pos for LWJGL raw mouse delta consumption
     const float nextX = g_cursorX.load(std::memory_order_relaxed) + deltaX;
     const float nextY = g_cursorY.load(std::memory_order_relaxed) + deltaY;
     g_cursorX.store(nextX, std::memory_order_relaxed);
@@ -217,18 +265,29 @@ Java_io_velocraft_android_bridge_NativeEngineBridge_nativeConfigureRendererEnv(
     const char* rendererLib = env->GetStringUTFChars(rendererLibName, nullptr);
     const char* cacheDir = env->GetStringUTFChars(cacheDirPath, nullptr);
 
+    g_jreHomePath = jreHome;
+    g_logFilePath = "/storage/emulated/0/Android/media/id.xyverse.minecraft/log/latest.log";
+
+    std::string ldPath = std::string(jreHome) + "/lib:" +
+                         std::string(jreHome) + "/lib/jli:" +
+                         std::string(jreHome) + "/lib/server";
+
     setenv("JAVA_HOME", jreHome, 1);
+    setenv("LD_LIBRARY_PATH", ldPath.c_str(), 1);
     setenv("VELOCRAFT_RENDERER", rendererLib, 1);
     setenv("MESA_SHADER_CACHE_DIR", cacheDir, 1);
     setenv("MG_SHADER_CACHE_PATH", cacheDir, 1);
 
-    // Enable OpenGL 4.6 compatibility profile translation via MobileGlues / GL4ES for Sodium 0.5+
     setenv("LIBGL_ES", "3", 1);
     setenv("LIBGL_MIPMAP", "3", 1);
     setenv("LIBGL_NORMALIZE", "1", 1);
     setenv("LIBGL_NOERROR", "1", 1);
 
-    LOGI("Configured VeloCraft Native Environment: JAVA_HOME=%s, RENDERER=%s", jreHome, rendererLib);
+    ensureStdioRedirectedToLog();
+    appendNativeLineToLogFile(
+        "ENV",
+        std::string("JAVA_HOME=") + jreHome + " | RENDERER=" + rendererLib + " | LD_LIBRARY_PATH=" + ldPath
+    );
 
     env->ReleaseStringUTFChars(jreHomePath, jreHome);
     env->ReleaseStringUTFChars(rendererLibName, rendererLib);
@@ -239,20 +298,52 @@ JNIEXPORT jint JNICALL
 Java_io_velocraft_android_bridge_NativeEngineBridge_nativeLaunchDirectJvm(
     JNIEnv* env, jobject /*thiz*/, jstring jliLibPath, jobjectArray jvmArgsArray
 ) {
+    ensureStdioRedirectedToLog();
     pinThreadToPerformanceCores();
 
+    // Preload core OpenJDK shared libraries in dependency order for Android Bionic linker
+    if (!g_jreHomePath.empty()) {
+        const std::vector<std::string> preloadLibs = {
+            g_jreHomePath + "/lib/libjli.so",
+            g_jreHomePath + "/lib/jli/libjli.so",
+            g_jreHomePath + "/lib/server/libjvm.so",
+            g_jreHomePath + "/lib/libverify.so",
+            g_jreHomePath + "/lib/libjava.so",
+            g_jreHomePath + "/lib/libnet.so",
+            g_jreHomePath + "/lib/libnio.so",
+            g_jreHomePath + "/lib/libawt.so",
+            g_jreHomePath + "/lib/libawt_headless.so"
+        };
+        for (const auto& soPath : preloadLibs) {
+            if (access(soPath.c_str(), R_OK) == 0) {
+                void* handle = dlopen(soPath.c_str(), RTLD_LAZY | RTLD_GLOBAL);
+                if (handle) {
+                    appendNativeLineToLogFile("DLOPEN", "Loaded native OpenJDK library: " + soPath);
+                } else {
+                    const char* err = dlerror();
+                    appendNativeLineToLogFile(
+                        "DLOPEN-WARN",
+                        "Could not preload " + soPath + ": " + (err ? err : "unknown")
+                    );
+                }
+            }
+        }
+    }
+
     const char* jliPath = env->GetStringUTFChars(jliLibPath, nullptr);
+    appendNativeLineToLogFile("BOOT", std::string("Opening JLI entrypoint: ") + jliPath);
     void* libJli = dlopen(jliPath, RTLD_LAZY | RTLD_GLOBAL);
     env->ReleaseStringUTFChars(jliLibPath, jliPath);
 
     if (!libJli) {
-        LOGE("Failed to dlopen libjli.so: %s", dlerror());
+        const char* err = dlerror();
+        appendNativeLineToLogFile("FATAL", std::string("Failed to dlopen libjli.so: ") + (err ? err : "unknown"));
         return -1;
     }
 
     auto jliLaunch = reinterpret_cast<JLI_Launch_t>(dlsym(libJli, "JLI_Launch"));
     if (!jliLaunch) {
-        LOGE("Failed to resolve JLI_Launch symbol in libjli.so");
+        appendNativeLineToLogFile("FATAL", "Failed to resolve JLI_Launch symbol in libjli.so");
         return -2;
     }
 
@@ -266,15 +357,21 @@ Java_io_velocraft_android_bridge_NativeEngineBridge_nativeLaunchDirectJvm(
         env->DeleteLocalRef(jstr);
     }
 
-    LOGI("Booting Embedded OpenJDK (%s) directly into Fabric KnotClient (%d args)...", VELOCRAFT_ABI_NAME, argc);
+    appendNativeLineToLogFile(
+        "BOOT",
+        "Invoking OpenJDK JLI_Launch (" + std::string(VELOCRAFT_ABI_NAME) + ") with " + std::to_string(argc) + " arguments..."
+    );
+
     const int exitCode = jliLaunch(
         argc, argv.data(),
         0, nullptr,
         0, nullptr,
-        "21.0.4", "21.0",
+        "17.0.8", "17.0",
         "java", "openjdk",
         JNI_FALSE, JNI_FALSE, JNI_FALSE, 0
     );
+
+    appendNativeLineToLogFile("EXIT", "JLI_Launch returned exit code: " + std::to_string(exitCode));
 
     for (char* arg : argv) {
         free(arg);

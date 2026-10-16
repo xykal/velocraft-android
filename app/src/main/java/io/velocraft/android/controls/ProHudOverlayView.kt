@@ -79,6 +79,16 @@ class ProHudOverlayView @JvmOverloads constructor(
     var onGyroToggleRequested: ((Boolean) -> Unit)? = null
     var onQuickSettingsRequested: (() -> Unit)? = null
     var onOpenKeybindEditorRequested: ((HudButtonConfig?) -> Unit)? = null
+    var onExitHudEditor: (() -> Unit)? = null
+
+    fun enterVisualEditMode() {
+        isEditMode = true
+        toggledButtons.add("btn_edit_hud")
+        if (selectedEditButton == null) {
+            selectedEditButton = buttons.firstOrNull()
+        }
+        postInvalidateOnAnimation()
+    }
 
     // Telemetry
     var currentFps: Int = 120
@@ -496,6 +506,7 @@ class ProHudOverlayView @JvmOverloads constructor(
                         isEditMode = false
                         toggledButtons.remove("btn_edit_hud")
                         ControlProfileManager.saveLayout(context, buttons)
+                        onExitHudEditor?.invoke()
                         postInvalidateOnAnimation()
                         return true
                     }
@@ -506,6 +517,7 @@ class ProHudOverlayView @JvmOverloads constructor(
                     isEditMode = false
                     toggledButtons.remove(hit.id)
                     ControlProfileManager.saveLayout(context, buttons)
+                    onExitHudEditor?.invoke()
                 } else if (hit != null) {
                     draggingButton = hit
                     selectedEditButton = hit

@@ -38,7 +38,7 @@ class CustomCanvasModalView(
         RENDERER_ACCOUNT("RAM, RENDERER & AKUN"),
         CONTROLS_CURSOR("KONTROL & KURSOR"),
         KEYBIND_CREATOR("CUSTOM KEYBIND & HUD"),
-        DIAGNOSTIC_LOG("LOG & XYVERSE INFO")
+        DIAGNOSTIC_LOG("LOG DIAGNOSTIK")
     }
 
     var activeTab: Tab = Tab.RENDERER_ACCOUNT
@@ -54,7 +54,7 @@ class CustomCanvasModalView(
     private val sessionManager = PlayerSessionManager(context)
     private var editingUsername: String = sessionManager.getActiveSession().username
     private var bannerStatusText: String =
-        "Publisher: Xyverse Technology Global (Founder/Direktur: Haekal Saputra) | Pkg: ${context.packageName}"
+        "Log Dir: ${VeloLogger.logDir?.absolutePath ?: "/sdcard/Android/media/id.xyverse.minecraft/log"}"
 
     private val xyverseLogoBmp: Bitmap? = try {
         context.assets.open("branding/xyverse_logo_horizontal.png").use { BitmapFactory.decodeStream(it) }
@@ -537,36 +537,7 @@ class CustomCanvasModalView(
         right: Float,
         bottom: Float
     ) {
-        // Top Official Publisher Banner Card
-        val pubCardH = dp(48f)
-        tmpRect.set(left, top, right, top + pubCardH)
-        canvas.drawRoundRect(tmpRect, dp(8f), dp(8f), cardPaint)
-        canvas.drawRoundRect(tmpRect, dp(8f), dp(8f), borderPaint)
-
-        var textStartX = left + dp(12f)
-        xyverseLogoBmp?.let { logo ->
-            val lH = dp(32f)
-            val lW = lH * (logo.width.toFloat() / logo.height.coerceAtLeast(1))
-            srcRect.set(0, 0, logo.width, logo.height)
-            dstRect.set(textStartX, top + dp(8f), textStartX + lW, top + dp(8f) + lH)
-            canvas.drawBitmap(logo, srcRect, dstRect, bitmapPaint)
-            textStartX += lW + dp(14f)
-        }
-
-        canvas.drawText(
-            "XYVERSE TECHNOLOGY GLOBAL - Founder / Direktur: Haekal Saputra",
-            textStartX,
-            top + dp(19f),
-            titlePaint
-        )
-        canvas.drawText(
-            "Official Signed Package: ${context.packageName} | Cert Subject: CN=Haekal Saputra, O=Xyverse Technology Global, C=ID",
-            textStartX,
-            top + dp(36f),
-            mutedPaint
-        )
-
-        val logBarTop = top + pubCardH + dp(8f)
+        val logBarTop = top
         val btnW = dp(120f)
         val btnH = dp(28f)
         copyLogBtnRect.set(right - btnW, logBarTop, right, logBarTop + btnH)

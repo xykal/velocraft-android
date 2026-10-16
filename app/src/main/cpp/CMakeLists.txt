@@ -10,12 +10,6 @@ add_library(
     velocraft_jni.cpp
 )
 
-add_library(
-    jli_embedded
-    SHARED
-    jli_embedded.cpp
-)
-
 find_library(log-lib log)
 find_library(android-lib android)
 find_library(egl-lib EGL)
@@ -31,27 +25,7 @@ target_compile_options(
     -Wno-unused-parameter
 )
 
-target_compile_options(
-    jli_embedded
-    PRIVATE
-    -O3
-    -ffast-math
-    -Wall
-    -Wextra
-    -Wno-unused-parameter
-)
-
 target_link_libraries(
-    velocraft_bridge
-    ${log-lib}
-    ${android-lib}
-    ${egl-lib}
-    ${gles3-lib}
-    dl
-)
-
-target_link_libraries(
-    jli_embedded
     velocraft_bridge
     ${log-lib}
     ${android-lib}
