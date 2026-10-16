@@ -99,6 +99,10 @@ object NativeEngineBridge {
         }
     }
 
+    fun sendKeyEvent(glfwKeyCode: Int, pressed: Boolean) {
+        sendKey(glfwKeyCode, if (pressed) GLFW_PRESS else GLFW_RELEASE, 0)
+    }
+
     fun sendMouseButton(button: Int, action: Int, mods: Int = 0) {
         inputListener?.onMouseAction(button, action)
         if (!isNativeLoaded) return
@@ -109,6 +113,10 @@ object NativeEngineBridge {
         }
     }
 
+    fun sendMouseButton(button: Int, pressed: Boolean) {
+        sendMouseButton(button, if (pressed) GLFW_PRESS else GLFW_RELEASE, 0)
+    }
+
     fun sendCameraDelta(deltaX: Float, deltaY: Float) {
         inputListener?.onCameraDelta(deltaX, deltaY)
         if (!isNativeLoaded) return
@@ -117,6 +125,10 @@ object NativeEngineBridge {
         } catch (t: Throwable) {
             VeloLogger.error("nativeSendCameraDelta error", t)
         }
+    }
+
+    fun sendMouseDelta(deltaX: Float, deltaY: Float) {
+        sendCameraDelta(deltaX, deltaY)
     }
 
     fun sendCursorPos(x: Float, y: Float) {

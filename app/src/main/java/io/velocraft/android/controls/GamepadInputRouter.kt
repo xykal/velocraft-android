@@ -16,6 +16,15 @@ class GamepadInputRouter(
     private val onMoveVirtualCursorDelta: (dx: Float, dy: Float) -> Unit,
     private val isVirtualCursorActive: () -> Boolean
 ) {
+    constructor(hudView: ProHudOverlayView) : this(
+        onHotbarSlotChanged = { _ -> hudView.postInvalidateOnAnimation() },
+        onToggleVirtualCursor = { hudView.toggleVirtualCursor() },
+        onMoveVirtualCursorDelta = { dx, dy -> hudView.moveVirtualCursorByDelta(dx, dy) },
+        isVirtualCursorActive = { hudView.isVirtualCursorEnabled }
+    )
+
+    fun onKeyEvent(event: KeyEvent): Boolean = handleKeyEvent(event)
+    fun onGenericMotionEvent(event: MotionEvent): Boolean = handleMotionEvent(event)
     private var currentHotbarSlot = 0
     private var stickW = false
     private var stickS = false

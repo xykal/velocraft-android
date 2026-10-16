@@ -193,11 +193,13 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
             runOnUiThread {
                 val eff = RendererProfileManager.resolveEffectiveBackend(this@GameActivity)
                 proHudOverlay.activeRendererLabel = eff.id.uppercase()
-                proHudOverlay.visibility = if (state.inWorld && mainMenuView.visibility != View.VISIBLE) {
-                    View.VISIBLE
-                } else {
-                    proHudOverlay.visibility
+                if (state.clientFps > 0) {
+                    proHudOverlay.currentFps = state.clientFps
                 }
+                if (mainMenuView.visibility != View.VISIBLE) {
+                    proHudOverlay.visibility = View.VISIBLE
+                }
+                proHudOverlay.postInvalidateOnAnimation()
             }
         }
         fabricStateBridge.startListening()

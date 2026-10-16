@@ -24,8 +24,6 @@ object RendererProfileManager {
         val supportsShaders: Boolean,
         val shortDesc: String
     ) {
-        val nativeLibName: String
-            get() = libName
         AUTO(
             id = "AUTO",
             displayName = "AUTO (Match Device GPU)",
@@ -65,7 +63,10 @@ object RendererProfileManager {
             glEsVersionEnv = "3",
             supportsShaders = true,
             shortDesc = "Akselerasi Vulkan penuh untuk HP Flagship Snapdragon/Xclipse dengan Shader berat"
-        )
+        );
+
+        val nativeLibName: String
+            get() = libName
     }
 
     private const val PREFS_NAME = "velocraft_renderer_prefs"

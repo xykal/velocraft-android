@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <vector>
 
 #include "lwjgl_input_bridge.h"
 
