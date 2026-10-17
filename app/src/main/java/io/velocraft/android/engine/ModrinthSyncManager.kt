@@ -18,10 +18,10 @@ import java.util.zip.ZipInputStream
 /**
  * Multi-Category Content Hub, Live Modrinth v2 REST API Browser, Searcher & Auto-Installer
  * for Minecraft 1.20.4 (Fabric):
- * 1. `MODS` -> `.minecraft/mods/*.jar`
- * 2. `SHADERS` -> `.minecraft/shaderpacks/*.zip`
- * 3. `RESOURCE_PACKS` (Tekstur) -> `.minecraft/resourcepacks/*.zip` (+ auto-enable in `options.txt`)
- * 4. `MAPS_WORLDS` (Map & Dunia) -> `.minecraft/saves/<MapFolder>/` (auto-extracted for Singleplayer)
+ * 1. `MODS` -> `.minecraft/mods/` (`.jar`)
+ * 2. `SHADERS` -> `.minecraft/shaderpacks/` (`.zip`)
+ * 3. `RESOURCE_PACKS` (Tekstur) -> `.minecraft/resourcepacks/` (`.zip` + auto-enable in `options.txt`)
+ * 4. `MAPS_WORLDS` (Map & Dunia) -> `.minecraft/saves/` (auto-extracted for Singleplayer)
  */
 object ModrinthSyncManager {
 

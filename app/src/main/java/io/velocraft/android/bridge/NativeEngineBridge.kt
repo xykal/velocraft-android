@@ -69,6 +69,7 @@ object NativeEngineBridge {
 
     // GLFW Keycodes for Pro PvP HUD
     const val KEY_SPACE        = 32
+    const val KEY_SLASH        = 47
     const val KEY_1            = 49
     const val KEY_2            = 50
     const val KEY_3            = 51
