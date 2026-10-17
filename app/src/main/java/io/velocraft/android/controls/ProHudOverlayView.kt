@@ -575,35 +575,45 @@ class ProHudOverlayView @JvmOverloads constructor(
             }
 
             // 1. Outer shadow/backing frame (scales with effectiveOpacity)
-            bgFillPaint.color = modulateAlpha(0xFF10100E.toInt(), (effectiveOpacity * 0.48f).coerceIn(0.04f, 0.68f))
-            tmpBtnRect.set(cx - halfW - dp(1.8f), cy - halfH - dp(1.8f), cx + halfW + dp(1.8f), cy + halfH + dp(1.8f))
+            bgFillPaint.color = modulateAlpha(0xFF0A0C0B.toInt(), (effectiveOpacity * 0.56f).coerceIn(0.04f, 0.72f))
+            tmpBtnRect.set(cx - halfW - dp(2.0f), cy - halfH - dp(1.5f), cx + halfW + dp(2.0f), cy + halfH + dp(2.8f))
             if (btn.shape == ButtonShape.CIRCLE) {
-                canvas.drawCircle(cx, cy, r + dp(1.8f), bgFillPaint)
+                canvas.drawCircle(cx, cy + dp(1.0f), r + dp(2.0f), bgFillPaint)
             } else {
                 canvas.drawRoundRect(tmpBtnRect, cornerRad + dp(1.5f), cornerRad + dp(1.5f), bgFillPaint)
             }
 
-            // 2. Main matte button surface (scales with effectiveOpacity)
-            bgFillPaint.color = if (isPressed) {
-                modulateAlpha(btn.accentHex, (effectiveOpacity + 0.22f).coerceIn(0.20f, 0.92f))
+            // 2. Sculpted 3D-beveled button surface with vertical gradient (scales with effectiveOpacity)
+            val topSurfCol = if (isPressed) {
+                modulateAlpha(btn.accentHex, (effectiveOpacity + 0.25f).coerceIn(0.22f, 0.96f))
             } else {
-                modulateAlpha(0xFF1B1A18.toInt(), (effectiveOpacity * 0.85f).coerceIn(0.06f, 0.90f))
+                modulateAlpha(0xFF282D29.toInt(), (effectiveOpacity * 0.88f).coerceIn(0.06f, 0.92f))
+            }
+            val botSurfCol = if (isPressed) {
+                modulateAlpha(0xFF1A241D.toInt(), (effectiveOpacity + 0.22f).coerceIn(0.20f, 0.95f))
+            } else {
+                modulateAlpha(0xFF151816.toInt(), (effectiveOpacity * 0.90f).coerceIn(0.06f, 0.94f))
             }
             tmpBtnRect.set(cx - halfW, cy - halfH, cx + halfW, cy + halfH)
+            bgFillPaint.shader = android.graphics.LinearGradient(
+                cx, cy - halfH, cx, cy + halfH,
+                topSurfCol, botSurfCol, android.graphics.Shader.TileMode.CLAMP
+            )
             if (btn.shape == ButtonShape.CIRCLE) {
                 canvas.drawCircle(cx, cy, r, bgFillPaint)
             } else {
                 canvas.drawRoundRect(tmpBtnRect, cornerRad, cornerRad, bgFillPaint)
             }
+            bgFillPaint.shader = null
 
-            // 3. Subtle inner bevel ring (scales with effectiveOpacity)
+            // 3. Subtle inner bevel ring + top specular glass highlight (scales with effectiveOpacity)
             strokePaint.color = if (isPressed) {
-                modulateAlpha(0xFFFFFFFF.toInt(), (effectiveOpacity * 0.45f).coerceIn(0.10f, 0.55f))
+                modulateAlpha(0xFFFFFFFF.toInt(), (effectiveOpacity * 0.55f).coerceIn(0.12f, 0.65f))
             } else {
-                modulateAlpha(btn.accentHex, (effectiveOpacity * 0.35f).coerceIn(0.04f, 0.45f))
+                modulateAlpha(btn.accentHex, (effectiveOpacity * 0.42f).coerceIn(0.05f, 0.52f))
             }
-            strokePaint.strokeWidth = dp(1f)
-            val inset = dp(3.2f)
+            strokePaint.strokeWidth = dp(1.1f)
+            val inset = dp(3.0f)
             if (btn.shape == ButtonShape.CIRCLE) {
                 canvas.drawCircle(cx, cy, (r - inset).coerceAtLeast(dp(4f)), strokePaint)
             } else {
@@ -611,13 +621,19 @@ class ProHudOverlayView @JvmOverloads constructor(
                 canvas.drawRoundRect(tmpBtnRect, (cornerRad - dp(2f)).coerceAtLeast(dp(3f)), (cornerRad - dp(2f)).coerceAtLeast(dp(3f)), strokePaint)
             }
 
+            // Top specular highlight line
+            strokePaint.color = modulateAlpha(0xFFFFFFFF.toInt(), (effectiveOpacity * 0.34f).coerceIn(0.04f, 0.44f))
+            if (btn.shape != ButtonShape.CIRCLE && halfW > dp(10f)) {
+                canvas.drawLine(cx - halfW * 0.55f, cy - halfH + dp(1.4f), cx + halfW * 0.55f, cy - halfH + dp(1.4f), strokePaint)
+            }
+
             // 4. Outer crisp stroke ring (scales with effectiveOpacity unless selected in editor)
             strokePaint.color = when {
                 isSelectedInEditor -> 0xFFF4F1EA.toInt()
                 isPressed -> modulateAlpha(0xFFF4F1EA.toInt(), (effectiveOpacity + 0.25f).coerceIn(0.25f, 1.0f))
-                else -> modulateAlpha(btn.accentHex, (effectiveOpacity * 0.92f).coerceIn(0.08f, 0.95f))
+                else -> modulateAlpha(btn.accentHex, (effectiveOpacity * 0.94f).coerceIn(0.08f, 0.96f))
             }
-            strokePaint.strokeWidth = if (isSelectedInEditor || isPressed) dp(2.2f) else dp(1.4f)
+            strokePaint.strokeWidth = if (isSelectedInEditor || isPressed) dp(2.2f) else dp(1.5f)
             tmpBtnRect.set(cx - halfW, cy - halfH, cx + halfW, cy + halfH)
             if (btn.shape == ButtonShape.CIRCLE) {
                 canvas.drawCircle(cx, cy, r, strokePaint)
@@ -775,12 +791,13 @@ class ProHudOverlayView @JvmOverloads constructor(
         val cpsR = macroEngine.getRightCps()
         val frameMsStr = String.format("%.1fms", cachedFrameTimeMs)
         val modeStr = if (cursorOn) "KURSOR" else "3D"
-        val gyroStr = if (toggledButtons.contains("btn_gyro")) "GYRO:ON" else "GYRO:OFF"
+        val resPct = PerformanceBooster.getLiveResolutionScalePct(context)
 
-        val fullStats = "$currentFps FPS (1% $cachedOnePercentLow | $frameMsStr)  |  " +
-            "CPS $cpsL:$cpsR  |  " +
-            "JVM $cachedJvmUsedMb/${cachedJvmMaxMb}MB (RAM $cachedSysRamPct%)  |  " +
-            "$activeRendererLabel  |  $modeStr • $gyroStr"
+        val fullStats = "$currentFps FPS (1% $cachedOnePercentLow | $frameMsStr)  •  " +
+            "CPS $cpsL:$cpsR  •  " +
+            "JVM $cachedJvmUsedMb/${cachedJvmMaxMb}MB  •  " +
+            "SKALA ${resPct}%  •  " +
+            "$activeRendererLabel • $modeStr"
 
         val textAreaLeft = sparkStartX + dp(29f)
         val textAreaW = (mainRight - textAreaLeft - dp(8f)).coerceAtLeast(dp(60f))
@@ -1734,18 +1751,23 @@ class ProHudOverlayView @JvmOverloads constructor(
         val r1 = RectF(left, y, left + halfW, y + h)
         val r2 = RectF(left + halfW + dp(8f), y, left + halfW * 2f + dp(8f), y + h)
 
-        bgFillPaint.color = color1
-        canvas.drawRoundRect(r1, dp(6.5f), dp(6.5f), bgFillPaint)
-        strokePaint.color = 0xFF3E3B35.toInt()
-        canvas.drawRoundRect(r1, dp(6.5f), dp(6.5f), strokePaint)
-        textPaint.textSize = dp(8.4f)
-        textPaint.color = 0xFFF4F1EA.toInt()
-        canvas.drawText(label1, r1.centerX(), r1.centerY() + dp(3.0f), textPaint)
+        for ((r, col, lbl) in listOf(Triple(r1, color1, label1), Triple(r2, color2, label2))) {
+            bgFillPaint.shader = android.graphics.LinearGradient(
+                r.left, r.top, r.left, r.bottom,
+                col, 0xFF171A18.toInt(), android.graphics.Shader.TileMode.CLAMP
+            )
+            canvas.drawRoundRect(r, dp(6.5f), dp(6.5f), bgFillPaint)
+            bgFillPaint.shader = null
 
-        bgFillPaint.color = color2
-        canvas.drawRoundRect(r2, dp(6.5f), dp(6.5f), bgFillPaint)
-        canvas.drawRoundRect(r2, dp(6.5f), dp(6.5f), strokePaint)
-        canvas.drawText(label2, r2.centerX(), r2.centerY() + dp(3.0f), textPaint)
+            strokePaint.color = 0x2AFFFFFF
+            canvas.drawLine(r.left + dp(6f), r.top + dp(1.2f), r.right - dp(6f), r.top + dp(1.2f), strokePaint)
+            strokePaint.color = 0xFF424A44.toInt()
+            canvas.drawRoundRect(r, dp(6.5f), dp(6.5f), strokePaint)
+
+            textPaint.textSize = dp(8.4f)
+            textPaint.color = 0xFFF4F1EA.toInt()
+            canvas.drawText(lbl, r.centerX(), r.centerY() + dp(3.0f), textPaint)
+        }
 
         registerSidebarHit(r1, clipTop, clipBottom, action1)
         registerSidebarHit(r2, clipTop, clipBottom, action2)
@@ -1772,9 +1794,16 @@ class ProHudOverlayView @JvmOverloads constructor(
     ): Float {
         val h = dp(58f)
         val cardRect = RectF(left, y, left + width, y + h)
-        bgFillPaint.color = 0xFF22211E.toInt()
+        bgFillPaint.shader = android.graphics.LinearGradient(
+            cardRect.left, cardRect.top, cardRect.left, cardRect.bottom,
+            0xFF232824.toInt(), 0xFF171A18.toInt(), android.graphics.Shader.TileMode.CLAMP
+        )
         canvas.drawRoundRect(cardRect, dp(8f), dp(8f), bgFillPaint)
-        strokePaint.color = 0xFF3E3B35.toInt()
+        bgFillPaint.shader = null
+
+        strokePaint.color = 0x26FFFFFF
+        canvas.drawLine(cardRect.left + dp(8f), cardRect.top + dp(1.2f), cardRect.right - dp(8f), cardRect.top + dp(1.2f), strokePaint)
+        strokePaint.color = 0xFF3A443D.toInt()
         strokePaint.strokeWidth = dp(1.2f)
         canvas.drawRoundRect(cardRect, dp(8f), dp(8f), strokePaint)
 

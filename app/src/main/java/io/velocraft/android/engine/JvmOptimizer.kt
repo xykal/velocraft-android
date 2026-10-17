@@ -18,7 +18,7 @@ object JvmOptimizer {
 
     private const val PREFS_NAME = "xyverse_jvm_optimizer_prefs"
     private const val KEY_CUSTOM_HEAP_MB = "custom_heap_mb" // <= 0 means use Recommended Default
-    private const val KEY_RESOLUTION_SCALE = "resolution_scale_pct" // 50, 75, 100
+    private const val KEY_RESOLUTION_SCALE = "resolution_scale_pct_v081" // 50..100
     private const val KEY_USE_ZGC = "use_generational_zgc"
 
     data class HardwareProfile(
@@ -70,15 +70,12 @@ object JvmOptimizer {
 
     fun getResolutionScalePct(context: Context): Int {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        return prefs.getInt(KEY_RESOLUTION_SCALE, 100).coerceIn(50, 100)
+        val defaultPct = if (Process.is64Bit()) 80 else 60
+        return prefs.getInt(KEY_RESOLUTION_SCALE, defaultPct).coerceIn(50, 100)
     }
 
     fun setResolutionScalePct(context: Context, pct: Int) {
-        val valid = when {
-            pct <= 55 -> 50
-            pct <= 80 -> 75
-            else -> 100
-        }
+        val valid = pct.coerceIn(50, 100)
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
             .putInt(KEY_RESOLUTION_SCALE, valid)
@@ -199,9 +196,11 @@ object JvmOptimizer {
         val canonCacheDir = context.cacheDir.canonicalFile
 
         val dm = context.resources.displayMetrics
+        val physW = maxOf(dm.widthPixels, dm.heightPixels)
+        val physH = minOf(dm.widthPixels, dm.heightPixels)
         val scaleFactor = hw.resolutionScalePct / 100.0f
-        val winW = ((dm.widthPixels * scaleFactor).toInt()).coerceAtLeast(640)
-        val winH = ((dm.heightPixels * scaleFactor).toInt()).coerceAtLeast(360)
+        val winW = (((physW * scaleFactor).toInt() + 1) and 1.inv()).coerceAtLeast(480)
+        val winH = (((physH * scaleFactor).toInt() + 1) and 1.inv()).coerceAtLeast(270)
 
         val args = mutableListOf(
             "java",

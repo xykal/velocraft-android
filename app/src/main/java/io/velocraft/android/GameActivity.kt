@@ -376,6 +376,7 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+        PerformanceBooster.applySavedResolutionScaleToEngine(this)
         NativeEngineBridge.setSurface(holder.surface, width, height)
     }
 

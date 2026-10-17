@@ -489,18 +489,54 @@ class BootLogOverlayView(
         val left = (w - centerW) * 0.5f
         val right = left + centerW
 
-        // 2. Top Area: 3D Isometric Voxel Cluster Animation + Orbiting Geometric Rings
-        val animCenterY = contentTop + availH * 0.23f
-        val ringRad = availH * 0.155f
+        // 2. Top Area: 3D Isometric Voxel Cluster Animation + Orbiting Geometric Rings + 4 Flanking Telemetry Pods
+        val animCenterY = contentTop + availH * 0.22f
+        val ringRad = availH * 0.145f
 
-        voxelWirePaint.color = Color.parseColor("#4E8C57")
-        voxelWirePaint.strokeWidth = 2.4f
+        // Radial ambient studio glow behind the 3D Voxel cluster
+        fillPaint.shader = android.graphics.RadialGradient(
+            w * 0.5f, animCenterY, ringRad * 2.2f,
+            intArrayOf(Color.parseColor("#384E9C5C"), Color.parseColor("#18C88240"), Color.TRANSPARENT),
+            floatArrayOf(0f, 0.55f, 1f),
+            Shader.TileMode.CLAMP
+        )
+        canvas.drawCircle(w * 0.5f, animCenterY, ringRad * 2.2f, fillPaint)
+        fillPaint.shader = null
+
+        // Left & Right Flanking Live Telemetry Micro-Pods
+        val podW = ((w * 0.5f - ringRad * 1.35f) - left).coerceIn(u * 0.22f, u * 0.42f)
+        val podH = ringRad * 0.82f
+        if (podW > u * 0.20f) {
+            val lPod1 = RectF(left, animCenterY - ringRad, left + podW, animCenterY - ringRad + podH)
+            val lPod2 = RectF(left, animCenterY + ringRad - podH, left + podW, animCenterY + ringRad)
+            val rPod1 = RectF(right - podW, animCenterY - ringRad, right, animCenterY - ringRad + podH)
+            val rPod2 = RectF(right - podW, animCenterY + ringRad - podH, right, animCenterY + ringRad)
+
+            for ((pRect, info) in listOf(
+                lPod1 to Triple("KELAS JVM DIMUAT", "$loadedClasses / $targetSplashClasses", true),
+                lPod2 to Triple("KECEPATAN LOADER", "${if (classesPerSec > 0) classesPerSec else 180} kls/dtk", false),
+                rPod1 to Triple("MEMORI HEAP JVM", "${if (jvmUsedRamMb > 0) jvmUsedRamMb else 256} / $jvmMaxRamMb MB", false),
+                rPod2 to Triple("TAHAP AKTIF (${currentStageIndex}/10)", "Waktu: ${elapsedSec} dtk", true)
+            )) {
+                canvas.drawRoundRect(pRect, 10f, 10f, cardBgPaint)
+                canvas.drawRoundRect(pRect, 10f, 10f, if (info.third) accentStrokePaint else strokePaint)
+                subPaint.textSize = u * 0.0145f
+                subPaint.color = Color.parseColor("#9AA39C")
+                drawFittedText(canvas, info.first, pRect.left + u * 0.014f, pRect.top + pRect.height() * 0.40f, pRect.width() - u * 0.028f, subPaint)
+                titlePaint.textSize = u * 0.0195f
+                titlePaint.color = if (info.third) Color.parseColor("#8CD996") else Color.parseColor("#E6B86A")
+                drawFittedText(canvas, info.second, pRect.left + u * 0.014f, pRect.top + pRect.height() * 0.78f, pRect.width() - u * 0.028f, titlePaint)
+            }
+        }
+
+        voxelWirePaint.color = Color.parseColor("#54A862")
+        voxelWirePaint.strokeWidth = 2.6f
         val ring1 = RectF(w * 0.5f - ringRad, animCenterY - ringRad, w * 0.5f + ringRad, animCenterY + ringRad)
         val deg1 = (animPhaseRad * 40f) % 360f
         canvas.drawArc(ring1, deg1, 115f, false, voxelWirePaint)
         canvas.drawArc(ring1, deg1 + 180f, 115f, false, voxelWirePaint)
 
-        voxelWirePaint.color = Color.parseColor("#C87D55")
+        voxelWirePaint.color = Color.parseColor("#D88A44")
         val r2 = ringRad * 0.76f
         val ring2 = RectF(w * 0.5f - r2, animCenterY - r2, w * 0.5f + r2, animCenterY + r2)
         val deg2 = 360f - ((animPhaseRad * 55f) % 360f)
@@ -523,9 +559,9 @@ class BootLogOverlayView(
             drawIsometricVoxelCube(canvas, isoX, isoY, cubeSize * 0.80f)
         }
 
-        // 3. Status Title & Smooth Progress Bar to Mojang Splash
-        var curY = animCenterY + ringRad + u * 0.032f
-        btnTextPaint.textSize = u * 0.025f
+        // 3. Status Title, Smooth Progress Bar & 10-Stage Segmented Stepper
+        var curY = animCenterY + ringRad + u * 0.028f
+        btnTextPaint.textSize = u * 0.024f
         btnTextPaint.color = Color.parseColor("#F4F1EA")
         canvas.drawText(
             "MENUNGGU LAYAR SPLASH MOJANG STUDIOS... (${bootPercent}%)",
@@ -534,10 +570,10 @@ class BootLogOverlayView(
             btnTextPaint
         )
 
-        curY += u * 0.030f
-        btnTextPaint.textSize = u * 0.0185f
+        curY += u * 0.026f
+        btnTextPaint.textSize = u * 0.018f
         btnTextPaint.color = Color.parseColor("#8CD996")
-        val etaText = "Estimasi Splash Mojang: ~${etaMojangSplashSec} detik lagi  •  $currentStageTitle"
+        val etaText = "Estimasi Splash Mojang: ~${etaMojangSplashSec} dtk lagi  •  $currentStageTitle"
         canvas.drawText(
             TextUtils.ellipsize(etaText, btnTextPaint, centerW, TextUtils.TruncateAt.END).toString(),
             w * 0.5f,
@@ -545,9 +581,9 @@ class BootLogOverlayView(
             btnTextPaint
         )
 
-        curY += u * 0.016f
-        val barH = u * 0.024f
-        val barW = centerW * 0.78f
+        curY += u * 0.014f
+        val barH = u * 0.022f
+        val barW = centerW * 0.82f
         val barLeft = (w - barW) * 0.5f
         progressTrackRect.set(barLeft, curY, barLeft + barW, curY + barH)
         canvas.drawRoundRect(progressTrackRect, barH * 0.5f, barH * 0.5f, trackPaint)
@@ -558,13 +594,29 @@ class BootLogOverlayView(
         fillPaint.shader = LinearGradient(
             barLeft, curY, barLeft + fillW, curY,
             Color.parseColor("#3E7346"),
-            Color.parseColor("#68B572"),
+            Color.parseColor("#68C876"),
             Shader.TileMode.CLAMP
         )
         canvas.drawRoundRect(progressFillRect, barH * 0.5f, barH * 0.5f, fillPaint)
         fillPaint.shader = null
 
-        curY += barH + u * 0.022f
+        // 10-Stage Segmented Stepper Pills
+        curY += barH + u * 0.010f
+        val stepGap = u * 0.008f
+        val stepW = (barW - stepGap * 9f) / 10f
+        val stepH = u * 0.012f
+        for (s in 1..10) {
+            val sx = barLeft + (s - 1) * (stepW + stepGap)
+            val sRect = RectF(sx, curY, sx + stepW, curY + stepH)
+            val sPaint = when {
+                s < currentStageIndex -> btnPrimaryPaint
+                s == currentStageIndex -> btnTerraPaint
+                else -> trackPaint
+            }
+            canvas.drawRoundRect(sRect, stepH * 0.5f, stepH * 0.5f, sPaint)
+        }
+
+        curY += stepH + u * 0.018f
 
         // 4. Bottom Action Pill Row Reservation
         val btnH = u * 0.064f

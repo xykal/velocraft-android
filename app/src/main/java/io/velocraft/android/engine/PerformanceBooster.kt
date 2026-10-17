@@ -50,16 +50,16 @@ object PerformanceBooster {
             id = "TURBO_FPS",
             title = "TURBO FPS REDMI A2 (C++ .SO)",
             shortTag = "TURBO",
-            subtitle = "3 Chunk • Sodium C++ Hook • Tanpa Awan/Partikel • Skala 65% (30-45+ FPS di Redmi A2)",
-            renderDistance = 3,
+            subtitle = "2 Chunk • Skala Hardware 60% • Tanpa Awan/Partikel/Bayangan (25-40+ FPS di Redmi A2)",
+            renderDistance = 2,
             simulationDistance = 5,
-            resolutionScalePct = 65,
+            resolutionScalePct = 60,
             graphicsMode = 0,
             particlesMode = 2,
             cloudsMode = "false",
             entityShadows = false,
             biomeBlend = 0,
-            maxFps = 260
+            maxFps = 120
         ),
         PVP_COMPETITIVE(
             id = "PVP_COMPETITIVE",
@@ -268,6 +268,7 @@ object PerformanceBooster {
                 "renderDistance" to renderDist.toString(),
                 "simulationDistance" to simDist.toString(),
                 "graphicsMode" to profile.graphicsMode.toString(),
+                "prioritizeChunkUpdates" to "0",
                 "particles" to (if (noPartCloud) "2" else profile.particlesMode.toString()),
                 "renderClouds" to (if (noPartCloud) "\"false\"" else "\"${profile.cloudsMode}\""),
                 "entityShadows" to (!noShadows).toString(),
@@ -275,8 +276,9 @@ object PerformanceBooster {
                 "maxFps" to profile.maxFps.toString(),
                 "enableVsync" to "false",
                 "mipmapLevels" to (if (renderDist <= 6) "0" else "2"),
-                "entityDistanceScaling" to (if (renderDist <= 4) "0.6" else if (renderDist <= 6) "0.75" else "1.0"),
-                "ao" to (if (renderDist <= 4) "false" else "true")
+                "entityDistanceScaling" to (if (renderDist <= 4) "0.5" else if (renderDist <= 6) "0.75" else "1.0"),
+                "ao" to (if (renderDist <= 4) "false" else "true"),
+                "bobView" to (if (renderDist <= 4) "false" else "true")
             )
 
             val existingLines = if (optionsFile.exists()) {

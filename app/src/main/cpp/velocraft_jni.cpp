@@ -75,7 +75,7 @@ struct SharedEngineState {
     std::atomic<int32_t> physicalHeight{720};
     std::atomic<int32_t> surfaceWidth{1280};
     std::atomic<int32_t> surfaceHeight{720};
-    std::atomic<float> resolutionScale{IS_64BIT_ABI ? 0.85f : 0.70f};
+    std::atomic<float> resolutionScale{IS_64BIT_ABI ? 0.80f : 0.60f};
     std::atomic<bool> cursorGrabbed{false};
     std::atomic<bool> inputReady{false};
 
@@ -899,10 +899,9 @@ void registerLwjglDlopenHookOnly(JNIEnv* vmEnv) {
     jclass dynLoader = vmEnv->FindClass("org/lwjgl/system/linux/DynamicLinkLoader");
     if (dynLoader) {
         JNINativeMethod m[] = {
-            {const_cast<char*>("ndlopen"), const_cast<char*>("(JI)J"), reinterpret_cast<void*>(&ndlopen_bugfix)},
-            {const_cast<char*>("ndlsym"), const_cast<char*>("(JJ)J"), reinterpret_cast<void*>(&ndlsym_bugfix)}
+            {const_cast<char*>("ndlopen"), const_cast<char*>("(JI)J"), reinterpret_cast<void*>(&ndlopen_bugfix)}
         };
-        vmEnv->RegisterNatives(dynLoader, m, 2);
+        vmEnv->RegisterNatives(dynLoader, m, 1);
     }
     if (vmEnv->ExceptionCheck()) {
         logJavaException(vmEnv, "DynamicLinkLoader.<clinit>");
@@ -1421,6 +1420,11 @@ void pojavMakeCurrent(void* window) {
             int rh = st->surfaceHeight.load(std::memory_order_relaxed);
             ANativeWindow_setBuffersGeometry(win, rw, rh, st->eglFormat);
             st->eglSurface = eglCreateWindowSurface(st->eglDisplay, st->eglConfig, win, nullptr);
+            if (st->eglSurface == EGL_NO_SURFACE) {
+                ANativeWindow_setBuffersGeometry(win, 0, 0, st->eglFormat);
+                st->eglSurface = eglCreateWindowSurface(st->eglDisplay, st->eglConfig, win, nullptr);
+            }
+            st->surfaceNeedsRebind.store(false, std::memory_order_release);
             appendNativeLineToLogFile(
                 "EGL",
                 "ANativeWindow berhasil diikat ke EGLSurface utama (" +
@@ -1429,6 +1433,7 @@ void pojavMakeCurrent(void* window) {
         } else {
             const EGLint pbufAttribs[] = {EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE};
             st->eglSurface = eglCreatePbufferSurface(st->eglDisplay, st->eglConfig, pbufAttribs);
+            st->surfaceNeedsRebind.store(false, std::memory_order_release);
         }
     }
     EGLContext ctx = reinterpret_cast<EGLContext>(window);
@@ -1849,11 +1854,12 @@ Java_io_velocraft_android_bridge_NativeEngineBridge_nativeSetSurface(
             velocraft_turbo_compute_scaled_dimensions(width, height, scale, &rw, &rh);
             st->surfaceWidth.store(rw, std::memory_order_relaxed);
             st->surfaceHeight.store(rh, std::memory_order_relaxed);
-            velocraft_turbo_apply_window_geometry(newWindow, rw, rh);
         }
         st->nativeWindow.store(newWindow, std::memory_order_release);
         st->isBackgrounded.store(false, std::memory_order_release);
-        st->surfaceNeedsRebind.store(true, std::memory_order_release);
+        if (st->eglSurface != EGL_NO_SURFACE) {
+            st->surfaceNeedsRebind.store(true, std::memory_order_release);
+        }
         st->windowSizeSyncCounter.store(0, std::memory_order_relaxed);
         int curW = st->surfaceWidth.load(std::memory_order_relaxed);
         int curH = st->surfaceHeight.load(std::memory_order_relaxed);
@@ -2148,12 +2154,8 @@ Java_io_velocraft_android_bridge_NativeEngineBridge_nativeConfigureRendererEnv(
     setenv("LIBGL_NORMALIZE", "1", 1);
     setenv("LIBGL_NOERROR", "1", 1);
     setenv("LIBGL_NOINTOVLHACK", "1", 1);
-    setenv("LIBGL_FASTMATH", "1", 1);
     setenv("LIBGL_NOHIGHP", "1", 1);
-    setenv("LIBGL_SILENTSTUB", "1", 1);
-    setenv("LIBGL_NOBANNER", "1", 1);
-    setenv("LIBGL_RECYCLEFBO", "1", 1);
-    setenv("LIBGL_PSA_FOLDER", cacheDir, 1);
+    setenv("LIBGL_SHRINK", IS_64BIT_ABI ? "0" : "2", 1);
 
     ensureStdioRedirectedToLog();
     updateAndroidLinkerSearchPath(internalLinkerPath);
@@ -2248,7 +2250,6 @@ Java_io_velocraft_android_bridge_NativeEngineBridge_nativeLaunchDirectJvm(
 
     if (!nativesStr.empty()) {
         const std::vector<std::string> nativeEngineLibs = {
-            nativesStr + "/libvelocraft_turbo.so",
             nativesStr + "/libfreetype.so",
             nativesStr + "/libopenal.so",
             nativesStr + "/libgl4es_114.so",
@@ -2258,7 +2259,8 @@ Java_io_velocraft_android_bridge_NativeEngineBridge_nativeLaunchDirectJvm(
             nativesStr + "/liblwjgl_stb.so",
             nativesStr + "/liblwjgl_tinyfd.so",
             nativesStr + "/liblwjgl_nanovg.so",
-            nativesStr + "/libpojavexec.so"
+            nativesStr + "/libpojavexec.so",
+            nativesStr + "/libvelocraft_turbo.so"
         };
         for (const auto& soPath : nativeEngineLibs) {
             if (access(soPath.c_str(), R_OK) == 0) {

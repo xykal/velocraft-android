@@ -10,23 +10,20 @@ extern "C" {
 #endif
 
 /**
- * Initializes the VeloCraft C++ Turbo Engine (`libvelocraft_turbo.so`) against a loaded
- * OpenGL / GL4ES library handle (`libgl4es_114.so`).
+ * Initializes the VeloCraft C++ Turbo Engine against a loaded OpenGL / GL4ES library handle (`libgl4es_114.so`).
  */
 void velocraft_turbo_init_gl_hooks(void* glHandle);
 
 /**
- * Intercepts OpenGL procedure lookups (`glXGetProcAddress`, `eglGetProcAddress`, `dlsym`)
- * and returns C++ accelerated / crash-safe replacements for broken GL4ES 1.1.5 entrypoints:
- * - `glMultiDrawElementsBaseVertex` / `glMultiDrawElements` (fixes Sodium 0.5.8 `__memcpy_a53` SIGSEGV)
- * - `glBindBuffer` / `glCopyBufferSubData` / `glFlushMappedBufferRange` for `0x8F36` & `0x8F37`
- *   (preserves `GL_ARRAY_BUFFER` hardware VBO type and syncs `real_buffer` via DSA)
+ * Intercepts OpenGL procedure lookups (`glXGetProcAddress` / `gl4es_glXGetProcAddress`)
+ * for missing or broken GL4ES 1.1.5 entrypoints (`glFenceSync`, `glClientWaitSync`,
+ * `glWaitSync`, `glDeleteSync`, `glGetSynciv`, `glIsSync`, `glMultiDrawElementsBaseVertex`).
+ * Never replaces core GL functions unless the underlying GL4ES target symbol is verified non-null.
  */
 void* velocraft_turbo_intercept_gl_proc(const char* name, void* originalSym);
 
 /**
- * Applies hardware-compositor surface scaling via `ANativeWindow_setBuffersGeometry`
- * and computes aligned render dimensions (multiples of 2).
+ * Computes aligned hardware-scaled render dimensions (even multiples of 2).
  */
 void velocraft_turbo_compute_scaled_dimensions(
     int physicalW,
@@ -36,20 +33,24 @@ void velocraft_turbo_compute_scaled_dimensions(
     int* outRenderH
 );
 
+/**
+ * Applies hardware-compositor surface scaling via `ANativeWindow_setBuffersGeometry`.
+ */
 void velocraft_turbo_apply_window_geometry(
     ANativeWindow* window,
     int renderW,
-    int renderH
+    int renderH,
+    int format
 );
 
 /**
- * Enables ARM hardware Flush-To-Zero (FZ) / Default-NaN (DN) floating-point acceleration
- * and elevates Linux thread scheduling priority for the active OpenGL render thread.
+ * Elevates Linux thread scheduling priority for the active OpenGL render thread
+ * without mutating JVM floating-point status registers.
  */
 void velocraft_turbo_boost_render_thread(void);
 
 /**
- * Releases unused native heap/scratch pages and returns total intercepted draw batch count.
+ * Telemetry & native memory trim helpers.
  */
 uint64_t velocraft_turbo_get_multi_draw_calls(void);
 uint64_t velocraft_turbo_get_vbo_copy_bytes(void);

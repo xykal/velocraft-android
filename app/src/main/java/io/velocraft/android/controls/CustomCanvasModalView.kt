@@ -257,8 +257,17 @@ class CustomCanvasModalView(
         val panelBottom = h - margin * 0.65f
 
         tmpRect.set(panelLeft, panelTop, panelRight, panelBottom)
+        panelPaint.shader = android.graphics.LinearGradient(
+            panelLeft, panelTop, panelLeft, panelBottom,
+            0xFF212622.toInt(), 0xFF141715.toInt(), android.graphics.Shader.TileMode.CLAMP
+        )
         canvas.drawRoundRect(tmpRect, dp(14f), dp(14f), panelPaint)
+        panelPaint.shader = null
+        borderPaint.color = 0xFF425246.toInt()
         canvas.drawRoundRect(tmpRect, dp(14f), dp(14f), borderPaint)
+        borderPaint.color = 0x33FFFFFF
+        canvas.drawLine(panelLeft + dp(16f), panelTop + dp(1.5f), panelRight - dp(16f), panelTop + dp(1.5f), borderPaint)
+        borderPaint.color = 0xFF363F39.toInt()
 
         // Top Tab Bar + Close Button
         val tabBarTop = panelTop + dp(8f)
@@ -266,6 +275,7 @@ class CustomCanvasModalView(
         val closeW = dp(86f)
         closeBtnRect.set(panelRight - dp(12f) - closeW, tabBarTop, panelRight - dp(12f), tabBarTop + tabH)
         canvas.drawRoundRect(closeBtnRect, dp(8f), dp(8f), terraPaint)
+        canvas.drawRoundRect(closeBtnRect, dp(8f), dp(8f), borderPaint)
         drawCenteredButtonText(canvas, "TUTUP [X]", closeBtnRect)
 
         val tabsAreaW = (closeBtnRect.left - panelLeft - dp(22f))
@@ -279,6 +289,7 @@ class CustomCanvasModalView(
                 dp(8f),
                 if (activeTab == tab) activeGreenPaint else cardPaint
             )
+            canvas.drawRoundRect(tabRects[i], dp(8f), dp(8f), borderPaint)
             drawCenteredButtonText(canvas, tab.title, tabRects[i])
         }
 

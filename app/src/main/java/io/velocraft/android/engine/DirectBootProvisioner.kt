@@ -88,7 +88,7 @@ class DirectBootProvisioner(private val context: Context) {
 
     private fun writePreTunedOptionsTxt(opts: JSONObject, includeFullMusicAssets: Boolean) {
         val optionsFile = File(gameDir, "options.txt")
-        val turboMarker = File(configDir, ".velocraft_turbo_v080")
+        val turboMarker = File(configDir, ".velocraft_turbo_v081")
         val hw = JvmOptimizer.detectHardware(context)
         val isLowEndDevice = !hw.is64Bit || hw.totalRamMb <= 3600
 
@@ -96,33 +96,41 @@ class DirectBootProvisioner(private val context: Context) {
             return
         }
 
-        val defaultRenderDist = if (isLowEndDevice) 3 else opts.optInt("renderDistance", 6)
+        val defaultRenderDist = when {
+            !hw.is64Bit -> 2
+            isLowEndDevice -> 3
+            else -> opts.optInt("renderDistance", 6)
+        }
         val defaultSimDist = if (isLowEndDevice) 5 else 6
         val musicVolume = if (includeFullMusicAssets) "1.0" else "0.0"
         val lines = buildString {
             appendLine("version:3700")
             appendLine("renderDistance:$defaultRenderDist")
             appendLine("simulationDistance:$defaultSimDist")
-            appendLine("entityDistanceScaling:${if (isLowEndDevice) 0.6 else opts.optDouble("entityDistanceScaling", 0.75)}")
+            appendLine("entityDistanceScaling:${if (isLowEndDevice) 0.5 else opts.optDouble("entityDistanceScaling", 0.75)}")
             appendLine("maxFps:${opts.optInt("maxFps", 120)}")
             appendLine("enableVsync:false")
             appendLine("graphicsMode:0")
-            appendLine("ao:0")
+            appendLine("prioritizeChunkUpdates:0")
+            appendLine("ao:false")
             appendLine("renderClouds:\"false\"")
             appendLine("particles:2")
             appendLine("entityShadows:false")
             appendLine("biomeBlendRadius:0")
             appendLine("mipmapLevels:0")
+            appendLine("bobView:false")
+            appendLine("screenEffectScale:0.0")
+            appendLine("fovEffectScale:0.0")
             appendLine("rawMouseInput:${opts.optBoolean("rawMouseInput", true)}")
             appendLine("autoJump:${opts.optBoolean("autoJump", false)}")
             appendLine("guiScale:${opts.optInt("guiScale", 2)}")
             appendLine("onboardAccessibility:false")
             appendLine("soundCategory_music:$musicVolume")
             appendLine("soundCategory_record:$musicVolume")
-            appendLine("# Auto-tuned by VeloCraft Turbo C++ v0.8.0 for ${hw.socModel} (${hw.totalRamMb}MB RAM, ABI=${hw.abi})")
+            appendLine("# Auto-tuned by VeloCraft Turbo C++ v0.8.1 for ${hw.socModel} (${hw.totalRamMb}MB RAM, ABI=${hw.abi})")
         }
         optionsFile.writeText(lines)
-        turboMarker.writeText("v0.8.0\n")
+        turboMarker.writeText("v0.8.1\n")
     }
 
     /**
@@ -194,11 +202,11 @@ class DirectBootProvisioner(private val context: Context) {
     }
 
     /**
-     * With `libvelocraft_turbo.so` intercepting `glMultiDrawElementsBaseVertex` / `glMultiDrawElements`
-     * and routing `GL_COPY_READ_BUFFER` (`0x8F36`) / `GL_COPY_WRITE_BUFFER` (`0x8F37`) via DSA
-     * `glNamedBufferSubData`, **Sodium 0.5.8**, **ImmediatelyFast**, **Lithium**, **FerriteCore**,
-     * **ModernFix**, and **EntityCulling** all run at full speed on `GL4ES 1.1.5`!
-     * Only `iris` (which requires OpenGL 3.3+ MRT shader pipelines) is kept disabled on `GL4ES 1.1.5`.
+     * Prevents Mojang Splash (`GL32C.glFenceSync` stub in `libgl4es_114.so`) and 100% World Join
+     * (`GL_COPY_WRITE_BUFFER` + `uvec4` GLSL 330 chunk shaders) crashes on `GL4ES 1.1.5` by
+     * keeping GL32/GL33-only mods (`sodium`, `iris`, `immediatelyfast`) disabled on `GL4ES 1.1.5`,
+     * while ensuring CPU/memory/culling mods (`lithium`, `ferritecore`, `modernfix`, `entityculling`)
+     * remain active alongside `libvelocraft_turbo.so` hardware resolution scaling.
      */
     private fun enforceRendererModCompatibility() {
         try {
@@ -209,28 +217,34 @@ class DirectBootProvisioner(private val context: Context) {
             val files = modsDir.listFiles() ?: return
             for (file in files) {
                 val lower = file.name.lowercase()
+                val isGl32OnlyMod = lower.contains("sodium") ||
+                    lower.contains("iris") ||
+                    lower.contains("immediatelyfast")
                 val isIrisOnly = lower.contains("iris")
-                val isTurboFpsMod = lower.contains("sodium") ||
-                    lower.contains("immediatelyfast") ||
-                    lower.contains("lithium") ||
-                    lower.contains("ferrite") ||
-                    lower.contains("modernfix") ||
-                    lower.contains("entityculling")
 
-                if (isIrisOnly && (isGl4es || !shadersActive)) {
+                if (isGl4es && isGl32OnlyMod) {
                     if (file.name.endsWith(".jar")) {
                         val disabled = File(file.parentFile, "${file.name}.disabled")
+                        if (disabled.exists()) disabled.delete()
                         file.renameTo(disabled)
+                        VeloLogger.section(
+                            "KOMPATIBILITAS-MOD",
+                            "GL4ES 1.1.5 aktif: Menonaktifkan sementara ${file.name} untuk mencegah crash Splash Mojang & 100% masuk dunia."
+                        )
                     }
-                } else if (isTurboFpsMod && file.name.endsWith(".jar.disabled")) {
-                    // Re-enable Sodium & ImmediatelyFast now that libvelocraft_turbo.so C++ hook is active!
-                    val cleanName = file.name.removeSuffix(".disabled")
-                    val restored = File(file.parentFile, cleanName)
-                    file.renameTo(restored)
-                    VeloLogger.section(
-                        "TURBO-C++",
-                        "libvelocraft_turbo.so aktif: Mengaktifkan kembali $cleanName pada GL4ES 1.1.5 untuk +250% FPS!"
-                    )
+                } else if (!isGl4es) {
+                    if (isIrisOnly && !shadersActive) {
+                        if (file.name.endsWith(".jar")) {
+                            val disabled = File(file.parentFile, "${file.name}.disabled")
+                            if (disabled.exists()) disabled.delete()
+                            file.renameTo(disabled)
+                        }
+                    } else if (isGl32OnlyMod && file.name.endsWith(".jar.disabled")) {
+                        val cleanName = file.name.removeSuffix(".disabled")
+                        val restored = File(file.parentFile, cleanName)
+                        if (restored.exists()) restored.delete()
+                        file.renameTo(restored)
+                    }
                 }
             }
         } catch (_: Exception) {
