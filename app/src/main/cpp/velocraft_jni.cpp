@@ -65,7 +65,7 @@ int64_t currentTimeMillis() {
 
 /**
  * Cross-namespace Singleton State shared between ART's classloader namespace (`libvelocraft_bridge.so`)
- * and OpenJDK/Bionic's default namespace (`libpojavexec.so`) via `VELOCRAFT_SHARED_STATE_ADDR`.
+ * and OpenJDK/Bionic's default namespace (`libvelocexec.so`) via `VELOCRAFT_SHARED_STATE_ADDR`.
  */
 struct SharedEngineState {
     LockFreeInputQueue<2048> inputQueue;
@@ -186,15 +186,13 @@ std::string sanitizeLogString(std::string s) {
         const char* from;
         const char* to;
     } replacements[] = {
-        {"libpojavexec.so", "libvelocraft_bridge.so"},
-        {"pojavexec", "velocraft_bridge"},
-        {"PojavRendererInit", "VeloCraftRendererInit"},
-        {"fixPojavGLContext", "fixVeloCraftGLContext"},
-        {"pojavInitOpenGL", "initOpenGLContext"},
-        {"pojavInit", "initBridge"},
-        {"POJAV_RENDERER", "VELOCRAFT_RENDERER"},
-        {"Pojav", "VeloCraft"},
-        {"pojav", "velocraft"}
+        {"libvelocexec.so", "libvelocraft_bridge.so"},
+        {"velocexec", "velocraft_bridge"},
+        {"VelocRendererInit", "VeloCraftRendererInit"},
+        {"fixVelocGLContext", "fixVeloCraftGLContext"},
+        {"velocInitOpenGL", "initOpenGLContext"},
+        {"velocInit", "initBridge"},
+        {"VELOC_RENDERER", "VELOCRAFT_RENDERER"}
     };
     for (const auto& r : replacements) {
         size_t pos = 0;
@@ -1303,11 +1301,11 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* /*reserved*/) {
 }
 
 // =========================================================================================
-// PojavExec / LWJGL3-Android GLFW C Symbols (Loaded by org.lwjgl.glfw.GLFW$Functions)
+// VelocExec / LWJGL3-Android GLFW C Symbols (Loaded by org.lwjgl.glfw.GLFW$Functions)
 // =========================================================================================
 
 __attribute__((visibility("default"), used))
-int pojavInit() {
+int velocInit() {
     SharedEngineState* st = getSharedState();
     st->bootStageIndex.store(9, std::memory_order_relaxed);
     st->bootPercent.store(std::max(90, st->bootPercent.load(std::memory_order_relaxed)), std::memory_order_relaxed);
@@ -1364,19 +1362,19 @@ int pojavInit() {
     }
     appendNativeLineToLogFile(
         "EGL",
-        "pojavInit() siap: resolusi render=" + std::to_string(w) + "x" + std::to_string(h) +
+        "initBridge() siap: resolusi render=" + std::to_string(w) + "x" + std::to_string(h) +
             " (Skala Hardware " + std::to_string(static_cast<int>(scale * 100.0f + 0.5f)) + "%)"
     );
     return 1;
 }
 
 __attribute__((visibility("default"), used))
-void* pojavCreateContext(void* contextSrc) {
+void* velocCreateContext(void* contextSrc) {
     SharedEngineState* st = getSharedState();
     if (st->eglDisplay == EGL_NO_DISPLAY) {
-        pojavInit();
+        velocInit();
     }
-    const EGLint configAttribs[] = {
+    const EGLint configAttribs24[] = {
         EGL_BLUE_SIZE, 8,
         EGL_GREEN_SIZE, 8,
         EGL_RED_SIZE, 8,
@@ -1387,7 +1385,19 @@ void* pojavCreateContext(void* contextSrc) {
         EGL_NONE
     };
     EGLint numConfigs = 0;
-    eglChooseConfig(st->eglDisplay, configAttribs, &st->eglConfig, 1, &numConfigs);
+    if (eglChooseConfig(st->eglDisplay, configAttribs24, &st->eglConfig, 1, &numConfigs) != EGL_TRUE || numConfigs == 0) {
+        const EGLint configAttribs16[] = {
+            EGL_BLUE_SIZE, 8,
+            EGL_GREEN_SIZE, 8,
+            EGL_RED_SIZE, 8,
+            EGL_ALPHA_SIZE, 8,
+            EGL_DEPTH_SIZE, 16,
+            EGL_SURFACE_TYPE, EGL_WINDOW_BIT | EGL_PBUFFER_BIT,
+            EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+            EGL_NONE
+        };
+        eglChooseConfig(st->eglDisplay, configAttribs16, &st->eglConfig, 1, &numConfigs);
+    }
     eglGetConfigAttrib(st->eglDisplay, st->eglConfig, EGL_NATIVE_VISUAL_ID, &st->eglFormat);
     eglBindAPI(EGL_OPENGL_ES_API);
 
@@ -1402,12 +1412,12 @@ void* pojavCreateContext(void* contextSrc) {
 }
 
 __attribute__((visibility("default"), used))
-void* pojavGetCurrentContext() {
+void* velocGetCurrentContext() {
     return reinterpret_cast<void*>(getSharedState()->eglContext);
 }
 
 __attribute__((visibility("default"), used))
-void pojavMakeCurrent(void* window) {
+void velocMakeCurrent(void* window) {
     SharedEngineState* st = getSharedState();
     if (window == nullptr) {
         eglMakeCurrent(st->eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
@@ -1444,7 +1454,7 @@ void pojavMakeCurrent(void* window) {
 }
 
 __attribute__((visibility("default"), used))
-void pojavSwapBuffers() {
+void velocSwapBuffers() {
     SharedEngineState* st = getSharedState();
     if (st->eglDisplay == EGL_NO_DISPLAY || st->eglContext == EGL_NO_CONTEXT) {
         return;
@@ -1511,7 +1521,7 @@ void pojavSwapBuffers() {
 }
 
 __attribute__((visibility("default"), used))
-void pojavSwapInterval(int interval) {
+void velocSwapInterval(int interval) {
     SharedEngineState* st = getSharedState();
     if (st->eglDisplay != EGL_NO_DISPLAY) {
         eglSwapInterval(st->eglDisplay, interval);
@@ -1519,11 +1529,11 @@ void pojavSwapInterval(int interval) {
 }
 
 __attribute__((visibility("default"), used))
-void pojavSetWindowHint(int /*hint*/, int /*value*/) {
+void velocSetWindowHint(int /*hint*/, int /*value*/) {
 }
 
 __attribute__((visibility("default"), used))
-void pojavTerminate() {
+void velocTerminate() {
     SharedEngineState* st = getSharedState();
     if (st->eglDisplay != EGL_NO_DISPLAY) {
         eglMakeCurrent(st->eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
@@ -1541,11 +1551,11 @@ void pojavTerminate() {
 }
 
 __attribute__((visibility("default"), used))
-void pojavStartPumping() {
+void velocStartPumping() {
 }
 
 __attribute__((visibility("default"), used))
-void pojavPumpEvents(void* window) {
+void velocPumpEvents(void* window) {
     SharedEngineState* st = getSharedState();
     void* targetWin = window ? window : reinterpret_cast<void*>(st->showingWindow);
     if (!targetWin) {
@@ -1668,11 +1678,11 @@ void pojavPumpEvents(void* window) {
 }
 
 __attribute__((visibility("default"), used))
-void pojavStopPumping() {
+void velocStopPumping() {
 }
 
 // =========================================================================================
-// JNI Methods for org.lwjgl.glfw.GLFW & org.lwjgl.glfw.CallbackBridge & PojavRendererInit
+// JNI Methods for org.lwjgl.glfw.GLFW & org.lwjgl.glfw.CallbackBridge & VelocRendererInit
 // =========================================================================================
 
 #define DEFINE_GLFW_CALLBACK_SETTER(NAME, FIELD) \
@@ -1790,7 +1800,7 @@ Java_org_lwjgl_glfw_CallbackBridge_nativeEnableGamepadDirectInput(JNIEnv* /*env*
 }
 
 JNIEXPORT void JNICALL
-Java_org_lwjgl_opengl_PojavRendererInit_nativeInitGl4esInternals(
+Java_org_lwjgl_opengl_VelocRendererInit_nativeInitGl4esInternals(
     JNIEnv* env, jclass /*cls*/, jobject function_provider
 ) {
     if (!function_provider) return;
@@ -2142,19 +2152,19 @@ Java_io_velocraft_android_bridge_NativeEngineBridge_nativeConfigureRendererEnv(
     setenv("TMPDIR", cacheDir, 1);
     setenv("LD_LIBRARY_PATH", envLdPath.c_str(), 1);
     setenv("PATH", (jreHomeStr + "/bin:/system/bin").c_str(), 1);
-    setenv("POJAV_NATIVEDIR", nativesStr.c_str(), 1);
-    setenv("POJAV_RENDERER", "opengles2", 1);
+    setenv("VELOC_NATIVEDIR", nativesStr.c_str(), 1);
+    setenv("VELOC_RENDERER", "opengles2", 1);
     setenv("VELOCRAFT_RENDERER", rendererLib, 1);
     setenv("MESA_SHADER_CACHE_DIR", cacheDir, 1);
     setenv("MESA_GLSL_CACHE_DIR", cacheDir, 1);
     setenv("MG_SHADER_CACHE_PATH", cacheDir, 1);
 
     setenv("LIBGL_ES", "2", 1);
-    setenv("LIBGL_MIPMAP", "3", 1);
+    setenv("LIBGL_MIPMAP", "0", 1);
     setenv("LIBGL_NORMALIZE", "1", 1);
     setenv("LIBGL_NOERROR", "1", 1);
     setenv("LIBGL_NOINTOVLHACK", "1", 1);
-    setenv("LIBGL_NOHIGHP", "1", 1);
+    unsetenv("LIBGL_NOHIGHP");
     unsetenv("LIBGL_SHRINK");
     unsetenv("LIBGL_RECYCLEFBO");
 
@@ -2272,7 +2282,7 @@ Java_io_velocraft_android_bridge_NativeEngineBridge_nativeLaunchDirectJvm(
             nativesStr + "/liblwjgl_stb.so",
             nativesStr + "/liblwjgl_tinyfd.so",
             nativesStr + "/liblwjgl_nanovg.so",
-            nativesStr + "/libpojavexec.so",
+            nativesStr + "/libvelocexec.so",
             nativesStr + "/libvelocraft_turbo.so"
         };
         for (const auto& soPath : nativeEngineLibs) {

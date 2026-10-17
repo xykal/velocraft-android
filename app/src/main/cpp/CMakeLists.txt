@@ -15,8 +15,8 @@ add_library(
     velocraft_turbo.cpp
 )
 
-# 2. Primary JNI & OpenJDK / LWJGL3 Bridge (`libvelocraft_bridge.so` / `libpojavexec.so`)
-# Includes velocraft_turbo.cpp directly so libpojavexec.so has zero cross-namespace DT_NEEDED dependencies
+# 2. Primary JNI & OpenJDK / LWJGL3 Bridge (`libvelocraft_bridge.so` / `libvelocexec.so`)
+# Includes velocraft_turbo.cpp directly so libvelocexec.so has zero cross-namespace DT_NEEDED dependencies
 add_library(
     velocraft_bridge
     SHARED

@@ -7,7 +7,7 @@ import java.util.zip.ZipInputStream
 /**
  * Extracts embedded or downloaded runtime archives and links APK native shared libraries
  * (`libgl4es_114.so`, `liblwjgl*.so`, `libopenal.so`, `libfreetype.so`, `libjnidispatch.so`,
- * and `libvelocraft_bridge.so` -> `libpojavexec.so`) into `nativesDir`.
+ * and `libvelocraft_bridge.so` -> `libvelocexec.so`) into `nativesDir`.
  */
 object RuntimeExtractor {
 
@@ -43,7 +43,7 @@ object RuntimeExtractor {
 
     /**
      * Copies native shared libraries from the APK's nativeLibraryDir into the LWJGL natives path
-     * and aliases `libvelocraft_bridge.so` as `libpojavexec.so` for `lwjgl-glfw-classes.jar`.
+     * and aliases `libvelocraft_bridge.so` as `libvelocexec.so` for `lwjgl-glfw-classes.jar`.
      */
     fun linkApkNativeLibraries(context: Context, nativesDir: File) {
         nativesDir.mkdirs()
@@ -60,10 +60,10 @@ object RuntimeExtractor {
                     dest.setReadable(true, false)
                 }
                 if (soFile.name == "libvelocraft_bridge.so") {
-                    val pojavExecAlias = File(nativesDir, "libpojavexec.so")
-                    soFile.copyTo(pojavExecAlias, overwrite = true)
-                    pojavExecAlias.setExecutable(true, false)
-                    pojavExecAlias.setReadable(true, false)
+                    val velocExecAlias = File(nativesDir, "libvelocexec.so")
+                    soFile.copyTo(velocExecAlias, overwrite = true)
+                    velocExecAlias.setExecutable(true, false)
+                    velocExecAlias.setReadable(true, false)
                 }
             }
         }

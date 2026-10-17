@@ -73,11 +73,7 @@ class MainMenuView @JvmOverloads constructor(
 
     private fun sanitizeLogLines(rawLines: List<String>): List<String> {
         return rawLines.map { raw ->
-            raw.replace("libpojavexec.so", "libvelocraft_bridge.so", ignoreCase = true)
-                .replace("pojavexec", "velocraft_bridge", ignoreCase = true)
-                .replace("pojavInitOpenGL", "initOpenGLContext", ignoreCase = true)
-                .replace("pojavInit", "initBridge", ignoreCase = true)
-                .replace("Pojav", "VeloCraft", ignoreCase = true)
+            raw.replace("libvelocexec.so", "libvelocraft_bridge.so", ignoreCase = true)
         }
     }
 
@@ -88,8 +84,11 @@ class MainMenuView @JvmOverloads constructor(
             if (value == NavPage.LOGS) {
                 logLines = sanitizeLogLines(VeloLogger.readLatestLogsTail(15000).lines())
                 logScrollY = 0f
-            } else if (value == NavPage.MODS_SHADERS && modrinthCatalog.isEmpty() && ModrinthSyncManager.activeDownloadSlug == null) {
-                triggerModrinthFetch(modrinthQuery)
+            } else if (value == NavPage.MODS_SHADERS) {
+                modrinthCatalog = ModrinthSyncManager.getCatalogWithDiskState(context)
+                if (ModrinthSyncManager.activeDownloadSlug == null) {
+                    triggerModrinthFetch(modrinthQuery)
+                }
             }
             postInvalidateOnAnimation()
         }
@@ -111,8 +110,8 @@ class MainMenuView @JvmOverloads constructor(
     private var isDraggingRamSlider: Boolean = false
     private var isDraggingResSlider: Boolean = false
 
-    // Page 3 Sub-Mode: false = Built-in Mods & Shaders, true = Live Modrinth Sync & Search
-    private var isModrinthOnlineTab: Boolean = false
+    // Page 3 Sub-Mode: true = 4-Category Content Hub (Mods, Shaders, Textures, Maps), false = Built-in Core Stack
+    private var isModrinthOnlineTab: Boolean = true
     private var modrinthQuery: String = ""
     private var modrinthCatalog: List<ModrinthSyncManager.ModrinthProjectItem> = emptyList()
 
@@ -161,9 +160,11 @@ class MainMenuView @JvmOverloads constructor(
     private val shaderToggleRect = RectF()
     private val shaderCycleRect = RectF()
     private val shaderSyncRect = RectF()
+    private val modrinthCategoryRects = Array(ModrinthSyncManager.ContentCategory.values().size) { RectF() }
     private val modrinthSearchInputRect = RectF()
     private val modrinthSearchBtnRect = RectF()
     private val modrinthSyncAllBtnRect = RectF()
+    private val modrinthLoadMoreBtnRect = RectF()
     private val modrinthItemRects = mutableListOf<Pair<ModrinthSyncManager.ModrinthProjectItem, RectF>>()
 
     // Page 4 (CONTROLS, HUD & JSON) Hit Rects
@@ -707,7 +708,7 @@ class MainMenuView @JvmOverloads constructor(
         canvas.drawCircle(tmpRect.left + dp(10f), tmpRect.centerY(), dp(3.2f), dotPaint)
         drawFittedText(
             canvas,
-            "v0.8.1-release • ${if (android.os.Process.is64Bit()) "64-BIT" else "32-BIT"}",
+            "v0.8.3-release • ${if (android.os.Process.is64Bit()) "64-BIT" else "32-BIT"}",
             tmpRect.left + dp(18f),
             tmpRect.centerY() + dp(3.2f),
             tmpRect.width() - dp(24f),
@@ -1155,23 +1156,23 @@ class MainMenuView @JvmOverloads constructor(
     }
 
     // =========================================================================
-    // PAGE 3: MODS, SHADER & LIVE MODRINTH SYNC (SCROLLABLE)
+    // PAGE 3: HUB KONTEN LENGKAP (MODS, SHADER, TEKSTUR, MAP/DUNIA) & OPTIMASI INTI
     // =========================================================================
     private fun drawModsAndShadersPage(canvas: Canvas, left: Float, top: Float, right: Float, bottom: Float) {
         val totalW = right - left
-        val halfW = (totalW - dp(10f)) * 0.5f
+        val halfW = (totalW - dp(8f)) * 0.5f
 
-        val subTabH = dp(30f)
-        modsSubTabLocalRect.set(left, top, left + halfW, top + subTabH)
-        modsSubTabModrinthRect.set(left + halfW + dp(10f), top, right, top + subTabH)
+        val subTabH = dp(27f)
+        modsSubTabModrinthRect.set(left, top, left + halfW, top + subTabH)
+        modsSubTabLocalRect.set(left + halfW + dp(8f), top, right, top + subTabH)
 
-        drawTactileButton(canvas, modsSubTabLocalRect, dp(7f), if (!isModrinthOnlineTab) ButtonStyle.EMERALD else ButtonStyle.ELEVATED)
-        canvas.drawText("MOD OPTIMASI BAWAAN & SHADERPACK", modsSubTabLocalRect.centerX(), modsSubTabLocalRect.centerY() + dp(3.6f), btnTextPaint)
+        drawTactileButton(canvas, modsSubTabModrinthRect, dp(6f), if (isModrinthOnlineTab) ButtonStyle.EMERALD else ButtonStyle.ELEVATED)
+        canvas.drawText("HUB UNDUH: MOD, SHADER, TEKSTUR & MAP (1.20.4)", modsSubTabModrinthRect.centerX(), modsSubTabModrinthRect.centerY() + dp(3.4f), btnTextPaint)
 
-        drawTactileButton(canvas, modsSubTabModrinthRect, dp(7f), if (isModrinthOnlineTab) ButtonStyle.EMERALD else ButtonStyle.ELEVATED)
-        canvas.drawText("KATALOG & SINKRONISASI MODRINTH (1.20.4)", modsSubTabModrinthRect.centerX(), modsSubTabModrinthRect.centerY() + dp(3.6f), btnTextPaint)
+        drawTactileButton(canvas, modsSubTabLocalRect, dp(6f), if (!isModrinthOnlineTab) ButtonStyle.EMERALD else ButtonStyle.ELEVATED)
+        canvas.drawText("MOD OPTIMASI INTI BAWAAN & SHADERPACK", modsSubTabLocalRect.centerX(), modsSubTabLocalRect.centerY() + dp(3.4f), btnTextPaint)
 
-        val bodyTop = top + subTabH + dp(8f)
+        val bodyTop = top + subTabH + dp(6f)
         if (!isModrinthOnlineTab) {
             drawLocalModsAndShaderContent(canvas, left, bodyTop, right, bottom)
         } else {
@@ -1183,7 +1184,7 @@ class MainMenuView @JvmOverloads constructor(
         val totalW = right - left
         val mods = RendererProfileManager.getModStackStatusCompat(context)
 
-        val shaderCardH = dp(52f)
+        val shaderCardH = dp(48f)
         tmpRect.set(left, top, right, top + shaderCardH)
         drawStudioCard(canvas, tmpRect, dp(9f), isHighlighted = false)
 
@@ -1193,7 +1194,7 @@ class MainMenuView @JvmOverloads constructor(
             canvas,
             "Manajer Shaderpack  •  Paket Aktif: $activePack",
             left + dp(14f),
-            top + dp(18f),
+            top + dp(17f),
             totalW * 0.54f,
             h2Paint
         )
@@ -1201,37 +1202,37 @@ class MainMenuView @JvmOverloads constructor(
             canvas,
             "Pelindung Kompatibilitas GL4ES 1.1.5 aktif otomatis menjaga stabilitas Mojang Splash & Dunia 100%.",
             left + dp(14f),
-            top + dp(35f),
+            top + dp(33f),
             totalW * 0.54f,
             mutedPaint
         )
 
-        val btnW = dp(102f)
-        val btnH = dp(30f)
+        val btnW = dp(98f)
+        val btnH = dp(28f)
         val btnY = top + (shaderCardH - btnH) * 0.5f
         shaderSyncRect.set(right - dp(12f) - btnW, btnY, right - dp(12f), btnY + btnH)
-        shaderCycleRect.set(shaderSyncRect.left - dp(7f) - btnW, btnY, shaderSyncRect.left - dp(7f), btnY + btnH)
-        shaderToggleRect.set(shaderCycleRect.left - dp(7f) - btnW, btnY, shaderCycleRect.left - dp(7f), btnY + btnH)
+        shaderCycleRect.set(shaderSyncRect.left - dp(6f) - btnW, btnY, shaderSyncRect.left - dp(6f), btnY + btnH)
+        shaderToggleRect.set(shaderCycleRect.left - dp(6f) - btnW, btnY, shaderCycleRect.left - dp(6f), btnY + btnH)
 
         drawTactileButton(canvas, shaderToggleRect, dp(6f), if (shadersOn) ButtonStyle.EMERALD else ButtonStyle.ELEVATED)
-        canvas.drawText(if (shadersOn) "SHADER: ON" else "SHADER: OFF", shaderToggleRect.centerX(), shaderToggleRect.centerY() + dp(3.5f), btnTextPaint)
+        canvas.drawText(if (shadersOn) "SHADER: ON" else "SHADER: OFF", shaderToggleRect.centerX(), shaderToggleRect.centerY() + dp(3.4f), btnTextPaint)
 
         drawTactileButton(canvas, shaderCycleRect, dp(6f), ButtonStyle.ELEVATED)
-        canvas.drawText("GANTI SHADER", shaderCycleRect.centerX(), shaderCycleRect.centerY() + dp(3.5f), btnTextPaint)
+        canvas.drawText("GANTI SHADER", shaderCycleRect.centerX(), shaderCycleRect.centerY() + dp(3.4f), btnTextPaint)
 
         drawTactileButton(canvas, shaderSyncRect, dp(6f), ButtonStyle.AMBER)
-        canvas.drawText("SINKRONKAN", shaderSyncRect.centerX(), shaderSyncRect.centerY() + dp(3.5f), btnTextPaint)
+        canvas.drawText("SINKRONKAN", shaderSyncRect.centerX(), shaderSyncRect.centerY() + dp(3.4f), btnTextPaint)
 
         // Scrollable 2-Column Mod Grid
-        val gridTop = top + shaderCardH + dp(8f)
+        val gridTop = top + shaderCardH + dp(7f)
         canvas.save()
         canvas.clipRect(left, gridTop, right, bottom)
 
         val cols = 2
-        val gapX = dp(10f)
-        val gapY = dp(8f)
+        val gapX = dp(8f)
+        val gapY = dp(7f)
         val cellW = (totalW - gapX) / cols
-        val cellH = dp(46f)
+        val cellH = dp(44f)
 
         modCardRects.clear()
         var maxBottom = gridTop
@@ -1246,15 +1247,15 @@ class MainMenuView @JvmOverloads constructor(
             if (r.bottom >= gridTop && r.top <= bottom) {
                 drawStudioCard(canvas, r, dp(8f), isHighlighted = mod.isEnabled)
 
-                val pillW = dp(76f)
-                val pillH = dp(24f)
-                val pillRect = RectF(r.right - dp(10f) - pillW, r.centerY() - pillH * 0.5f, r.right - dp(10f), r.centerY() + pillH * 0.5f)
+                val pillW = dp(74f)
+                val pillH = dp(23f)
+                val pillRect = RectF(r.right - dp(9f) - pillW, r.centerY() - pillH * 0.5f, r.right - dp(9f), r.centerY() + pillH * 0.5f)
                 drawTactileButton(canvas, pillRect, dp(6f), if (mod.isEnabled) ButtonStyle.EMERALD else ButtonStyle.SUBTLE)
-                canvas.drawText(if (mod.isEnabled) "AKTIF" else "NONAKTIF", pillRect.centerX(), pillRect.centerY() + dp(3.4f), btnTextPaint)
+                canvas.drawText(if (mod.isEnabled) "AKTIF" else "NONAKTIF", pillRect.centerX(), pillRect.centerY() + dp(3.3f), btnTextPaint)
 
-                val textMaxW = cellW - pillW - dp(26f)
-                drawFittedText(canvas, "${mod.title} [${mod.category}]", cx + dp(12f), cy + dp(18f), textMaxW, bodyBoldPaint)
-                drawFittedText(canvas, mod.summary, cx + dp(12f), cy + dp(33f), textMaxW, mutedPaint)
+                val textMaxW = cellW - pillW - dp(24f)
+                drawFittedText(canvas, "${mod.title} [${mod.category}]", cx + dp(11f), cy + dp(17f), textMaxW, bodyBoldPaint)
+                drawFittedText(canvas, mod.summary, cx + dp(11f), cy + dp(32f), textMaxW, mutedPaint)
             }
             modCardRects.add(mod.slug to r)
         }
@@ -1264,79 +1265,130 @@ class MainMenuView @JvmOverloads constructor(
 
     private fun drawModrinthOnlineContent(canvas: Canvas, left: Float, top: Float, right: Float, bottom: Float) {
         val totalW = right - left
+        if (modrinthCatalog.isEmpty()) {
+            modrinthCatalog = ModrinthSyncManager.getCatalogWithDiskState(context)
+        }
 
-        val barH = dp(32f)
-        val syncW = dp(138f)
-        val cariW = dp(92f)
-        val inputW = totalW - syncW - cariW - dp(16f)
+        // 1. 4-Category Switcher Bar: [MODS (.JAR)]  [SHADER (.ZIP)]  [TEKSTUR (RP)]  [MAP & DUNIA]
+        val cats = ModrinthSyncManager.ContentCategory.values()
+        val catGap = dp(6f)
+        val catW = (totalW - catGap * (cats.size - 1)) / cats.size
+        val catH = dp(26f)
+        val activeCat = ModrinthSyncManager.activeCategory
+        for ((idx, cat) in cats.withIndex()) {
+            val cl = left + idx * (catW + catGap)
+            modrinthCategoryRects[idx].set(cl, top, cl + catW, top + catH)
+            val isSel = (cat == activeCat)
+            drawTactileButton(
+                canvas,
+                modrinthCategoryRects[idx],
+                dp(6f),
+                if (isSel) ButtonStyle.EMERALD else ButtonStyle.SUBTLE
+            )
+            canvas.drawText(
+                cat.fullTitle,
+                modrinthCategoryRects[idx].centerX(),
+                modrinthCategoryRects[idx].centerY() + dp(3.3f),
+                btnTextPaint
+            )
+        }
 
-        modrinthSearchInputRect.set(left, top, left + inputW, top + barH)
-        modrinthSearchBtnRect.set(modrinthSearchInputRect.right + dp(8f), top, modrinthSearchInputRect.right + dp(8f) + cariW, top + barH)
-        modrinthSyncAllBtnRect.set(modrinthSearchBtnRect.right + dp(8f), top, right, top + barH)
+        // 2. Search Bar + [CARI] + [MUAT +30 LAGI] + [SEGARKAN]
+        val barTop = top + catH + dp(6f)
+        val barH = dp(28f)
+        val moreW = dp(118f)
+        val syncW = dp(96f)
+        val cariW = dp(68f)
+        val inputW = totalW - moreW - syncW - cariW - dp(18f)
 
-        drawStudioCard(canvas, modrinthSearchInputRect, dp(7f), isHighlighted = true)
-        val qDisplay = if (modrinthQuery.isBlank()) "Ketuk untuk cari Mod Fabric 1.20.4 via Keyboard IME..." else "Pencarian: $modrinthQuery"
-        drawFittedText(canvas, qDisplay, modrinthSearchInputRect.left + dp(12f), modrinthSearchInputRect.centerY() + dp(3.6f), inputW - dp(24f), bodyBoldPaint)
+        modrinthSearchInputRect.set(left, barTop, left + inputW, barTop + barH)
+        modrinthSearchBtnRect.set(modrinthSearchInputRect.right + dp(6f), barTop, modrinthSearchInputRect.right + dp(6f) + cariW, barTop + barH)
+        modrinthLoadMoreBtnRect.set(modrinthSearchBtnRect.right + dp(6f), barTop, modrinthSearchBtnRect.right + dp(6f) + moreW, barTop + barH)
+        modrinthSyncAllBtnRect.set(modrinthLoadMoreBtnRect.right + dp(6f), barTop, right, barTop + barH)
 
-        drawTactileButton(canvas, modrinthSearchBtnRect, dp(7f), ButtonStyle.EMERALD)
-        canvas.drawText("CARI MOD", modrinthSearchBtnRect.centerX(), modrinthSearchBtnRect.centerY() + dp(3.6f), btnTextPaint)
+        drawStudioCard(canvas, modrinthSearchInputRect, dp(6f), isHighlighted = true)
+        val qDisplay = if (modrinthQuery.isBlank()) {
+            "Cari ${activeCat.fullTitle} 1.20.4 (Ketuk IME)..."
+        } else {
+            "Cari: $modrinthQuery"
+        }
+        drawFittedText(canvas, qDisplay, modrinthSearchInputRect.left + dp(10f), modrinthSearchInputRect.centerY() + dp(3.4f), inputW - dp(20f), bodyBoldPaint)
 
-        drawTactileButton(canvas, modrinthSyncAllBtnRect, dp(7f), ButtonStyle.AMBER)
-        canvas.drawText("SEGARKAN MODRINTH", modrinthSyncAllBtnRect.centerX(), modrinthSyncAllBtnRect.centerY() + dp(3.6f), btnTextPaint)
+        drawTactileButton(canvas, modrinthSearchBtnRect, dp(6f), ButtonStyle.EMERALD)
+        canvas.drawText("CARI", modrinthSearchBtnRect.centerX(), modrinthSearchBtnRect.centerY() + dp(3.4f), btnTextPaint)
 
-        val statusY = top + barH + dp(13f)
+        drawTactileButton(canvas, modrinthLoadMoreBtnRect, dp(6f), ButtonStyle.SLATE)
+        canvas.drawText("+ MUAT 30 LAGI", modrinthLoadMoreBtnRect.centerX(), modrinthLoadMoreBtnRect.centerY() + dp(3.4f), btnTextPaint)
+
+        drawTactileButton(canvas, modrinthSyncAllBtnRect, dp(6f), ButtonStyle.AMBER)
+        canvas.drawText("SEGARKAN", modrinthSyncAllBtnRect.centerX(), modrinthSyncAllBtnRect.centerY() + dp(3.4f), btnTextPaint)
+
+        val statusY = barTop + barH + dp(11f)
         drawFittedText(canvas, ModrinthSyncManager.syncStatusMessage, left + dp(4f), statusY, totalW, mutedPaint)
 
-        val listTop = statusY + dp(7f)
+        // 3. 2-Column Scrollable Content Grid (Fits twice as many items neatly without clutter!)
+        val listTop = statusY + dp(5f)
         canvas.save()
         canvas.clipRect(left, listTop, right, bottom)
 
         modrinthItemRects.clear()
-        val itemH = dp(48f)
-        val gapY = dp(7f)
-        var cy = listTop - pageScrollY
-        for (item in modrinthCatalog) {
-            val r = RectF(left, cy, right, cy + itemH)
+        val cols = 2
+        val gapX = dp(8f)
+        val gapY = dp(6f)
+        val cellW = (totalW - gapX) / cols
+        val itemH = dp(44f)
+        var maxBottom = listTop
+
+        for ((idx, item) in modrinthCatalog.withIndex()) {
+            val col = idx % cols
+            val row = idx / cols
+            val cx = left + col * (cellW + gapX)
+            val cy = listTop + row * (itemH + gapY) - pageScrollY
+            val r = RectF(cx, cy, cx + cellW, cy + itemH)
+            maxBottom = max(maxBottom, listTop + (row + 1) * (itemH + gapY))
+
             if (r.bottom >= listTop && r.top <= bottom) {
                 drawStudioCard(canvas, r, dp(8f), isHighlighted = item.isInstalled)
 
-                val btnW = dp(132f)
-                val actRect = RectF(r.right - dp(10f) - btnW, r.top + dp(8f), r.right - dp(10f), r.bottom - dp(8f))
+                val btnW = dp(86f)
+                val actRect = RectF(r.right - dp(8f) - btnW, r.top + dp(8f), r.right - dp(8f), r.bottom - dp(8f))
+                val isDownloading = (ModrinthSyncManager.activeDownloadSlug == item.slug)
                 val actStyle = when {
+                    isDownloading -> ButtonStyle.AMBER
                     item.isEnabled -> ButtonStyle.EMERALD
                     item.isInstalled -> ButtonStyle.AMBER
                     else -> ButtonStyle.SLATE
                 }
                 drawTactileButton(canvas, actRect, dp(6f), actStyle)
                 val actLabel = when {
-                    item.isEnabled -> "TERPASANG [AKTIF]"
-                    item.isInstalled -> "TERPASANG [OFF]"
-                    else -> "UNDUH & PASANG"
+                    isDownloading -> "UNDUH..."
+                    item.isEnabled -> "AKTIF [ON]"
+                    item.isInstalled -> "MATI [OFF]"
+                    else -> "+ PASANG"
                 }
-                canvas.drawText(actLabel, actRect.centerX(), actRect.centerY() + dp(3.5f), btnTextPaint)
+                canvas.drawText(actLabel, actRect.centerX(), actRect.centerY() + dp(3.3f), btnTextPaint)
 
-                val textW = totalW - btnW - dp(32f)
+                val textW = cellW - btnW - dp(24f)
                 drawFittedText(
                     canvas,
-                    "${item.title} [${item.categoryTag}]  •  ${item.downloadsText}",
-                    r.left + dp(12f),
-                    r.top + dp(19f),
+                    "${item.title} [${item.categoryTag}]",
+                    r.left + dp(10f),
+                    r.top + dp(17f),
                     textW,
                     bodyBoldPaint
                 )
                 drawFittedText(
                     canvas,
-                    item.summary,
-                    r.left + dp(12f),
-                    r.top + dp(35f),
+                    "${item.downloadsText} • ${item.summary}",
+                    r.left + dp(10f),
+                    r.top + dp(32f),
                     textW,
                     mutedPaint
                 )
-                modrinthItemRects.add(item to actRect)
+                modrinthItemRects.add(item to r)
             }
-            cy += itemH + gapY
         }
-        pageContentHeight = modrinthCatalog.size * (itemH + gapY)
+        pageContentHeight = maxBottom - listTop + dp(20f)
         canvas.restore()
     }
 
@@ -1345,9 +1397,9 @@ class MainMenuView @JvmOverloads constructor(
     // =========================================================================
     private fun drawControlsAndHudPage(canvas: Canvas, left: Float, top: Float, right: Float, bottom: Float) {
         val totalW = right - left
-        val gap = dp(9f)
+        val gap = dp(8f)
         val cardW = (totalW - gap) * 0.5f
-        val cardH = ((bottom - top - gap * 2f) / 3f).coerceAtLeast(dp(68f))
+        val cardH = ((bottom - top - gap * 2f) / 3f).coerceAtLeast(dp(64f))
 
         val row1Y = top
         val row2Y = row1Y + cardH + gap
@@ -1390,12 +1442,12 @@ class MainMenuView @JvmOverloads constructor(
             val r = info.first
             drawStudioCard(canvas, r, dp(9f), isHighlighted = true)
 
-            drawFittedText(canvas, info.second, r.left + dp(12f), r.top + dp(18f), r.width() - dp(24f), h2Paint)
-            drawFittedText(canvas, info.third, r.left + dp(12f), r.top + dp(33f), r.width() - dp(24f), mutedPaint)
+            drawFittedText(canvas, info.second, r.left + dp(12f), r.top + dp(16f), r.width() - dp(24f), h2Paint)
+            drawFittedText(canvas, info.third, r.left + dp(12f), r.top + dp(30f), r.width() - dp(24f), mutedPaint)
 
-            val bRect = RectF(r.left + dp(12f), r.bottom - dp(32f), r.right - dp(12f), r.bottom - dp(7f))
+            val bRect = RectF(r.left + dp(12f), r.bottom - dp(29f), r.right - dp(12f), r.bottom - dp(6f))
             drawTactileButton(canvas, bRect, dp(6f), pair.second)
-            canvas.drawText(pair.first, bRect.centerX(), bRect.centerY() + dp(3.5f), btnTextPaint)
+            canvas.drawText(pair.first, bRect.centerX(), bRect.centerY() + dp(3.4f), btnTextPaint)
         }
     }
 
@@ -1799,10 +1851,23 @@ class MainMenuView @JvmOverloads constructor(
                 }
             }
         } else {
+            for ((idx, r) in modrinthCategoryRects.withIndex()) {
+                if (r.contains(x, y)) {
+                    val cat = ModrinthSyncManager.ContentCategory.values()[idx]
+                    pageScrollY = 0f
+                    modrinthQuery = ""
+                    ModrinthSyncManager.setCategory(context, cat) {
+                        modrinthCatalog = ModrinthSyncManager.getCatalogWithDiskState(context)
+                        postInvalidateOnAnimation()
+                    }
+                    return
+                }
+            }
             when {
                 modrinthSearchInputRect.contains(x, y) -> {
+                    val activeCat = ModrinthSyncManager.activeCategory
                     SystemImeHelper.requestTextInput(
-                        label = "Cari Mod Modrinth 1.20.4",
+                        label = "Cari ${activeCat.fullTitle} 1.20.4",
                         initialText = modrinthQuery,
                         maxLength = 42,
                         onChanged = { q ->
@@ -1817,6 +1882,13 @@ class MainMenuView @JvmOverloads constructor(
                 }
                 modrinthSearchBtnRect.contains(x, y) -> {
                     triggerModrinthFetch(modrinthQuery)
+                }
+                modrinthLoadMoreBtnRect.contains(x, y) -> {
+                    ModrinthSyncManager.loadMoreFromModrinth(context) {
+                        modrinthCatalog = ModrinthSyncManager.getCatalogWithDiskState(context)
+                        showBannerMessage(ModrinthSyncManager.syncStatusMessage)
+                        postInvalidateOnAnimation()
+                    }
                 }
                 modrinthSyncAllBtnRect.contains(x, y) -> {
                     modrinthQuery = ""

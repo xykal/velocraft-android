@@ -224,11 +224,10 @@ class CustomCanvasModalView(
 
     private fun sanitizeLines(lines: List<String>): List<String> {
         return lines.map { raw ->
-            raw.replace("libpojavexec.so", "libvelocraft_bridge.so", ignoreCase = true)
-                .replace("pojavexec", "velocraft_bridge", ignoreCase = true)
-                .replace("pojavInitOpenGL", "initOpenGLContext", ignoreCase = true)
-                .replace("pojavInit", "initBridge", ignoreCase = true)
-                .replace("Pojav", "VeloCraft", ignoreCase = true)
+            raw.replace("libvelocexec.so", "libvelocraft_bridge.so", ignoreCase = true)
+                .replace("velocexec", "velocraft_bridge", ignoreCase = true)
+                .replace("velocInitOpenGL", "initOpenGLContext", ignoreCase = true)
+                .replace("velocInit", "initBridge", ignoreCase = true)
         }
     }
 

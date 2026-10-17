@@ -4,165 +4,411 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import androidx.core.content.FileProvider
 import io.velocraft.android.bridge.NativeEngineBridge
 import io.velocraft.android.util.VeloLogger
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
-enum class ButtonShape(val displayName: String) {
-    CIRCLE("BULAT"),
-    ROUND_RECT("KOTAK"),
-    PILL("KAPSUL")
+enum class ActionType(val displayName: String) {
+    KEY_HOLD("Tahan Tombol (Hold)"),
+    KEY_TOGGLE("Saklar Tombol (Toggle)"),
+    MOUSE_LEFT_ATTACK("Klik Kiri / Serang (LMB)"),
+    MOUSE_RIGHT_PLACE("Klik Kanan / Pasang (RMB)"),
+    MOUSE_MIDDLE_PICK("Klik Tengah / Pick Block (MMB)"),
+    MOUSE_SCROLL_UP("Scroll Hotbar Naik (Wheel Up)"),
+    MOUSE_SCROLL_DOWN("Scroll Hotbar Turun (Wheel Down)"),
+    HOTBAR_SLOT("Slot Hotbar (1-9)"),
+    CURSOR_TOGGLE("Mode Kursor / Crosshair"),
+    HUD_EDITOR_TOGGLE("Mode Edit Tata Letak HUD"),
+    GYRO_TOGGLE("Aim Giroskop (Gyro)"),
+    PVP_COMBO_MACRO("Macro W-Tap + Sprint Combo"),
+    MACRO_DROP_STACK("Macro Buang 1 Stack (Ctrl+Q)"),
+    MACRO_HITBOXES("Macro Hitbox Entitas (F3+B)"),
+    MACRO_CHUNK_BORDERS("Macro Batas Chunk (F3+G)"),
+    MACRO_RELOAD_CHUNKS("Macro Muat Ulang Chunk (F3+A)"),
+    TOGGLE_HUD_CLEAN("Sembunyikan / Tampilkan HUD"),
+    QUICK_SETTINGS("Pengaturan Studio & Keybind"),
+    SIDEBAR_DRAWER_TOGGLE("Panel Samping (Sidebar Menu)"),
+    IME_KEYBOARD_TOGGLE("Keyboard Sistem Android (IME)")
 }
 
-/**
- * Defines a single interactive button on the Pro PvP HUD.
- * Styled with a clean, matte, non-neon palette and strictly zero emojis.
- */
+enum class ButtonShape(val displayName: String) {
+    ROUND_RECT("Kotak Sudut Halus"),
+    CIRCLE("Lingkaran Taktis"),
+    PILL("Kapsul Lebar")
+}
+
 data class HudButtonConfig(
     val id: String,
     var label: String,
     var normX: Float,
     var normY: Float,
     var radiusDp: Float,
-    var opacity: Float = 0.80f,
+    var opacity: Float,
     var actionType: ActionType,
     var keyCodeOrButton: Int = 0,
     var isToggle: Boolean = false,
-    var accentHex: Int = 0xFF78736A.toInt(),
-    var shape: ButtonShape = ButtonShape.CIRCLE,
-    var isVisible: Boolean = true
+    var isVisible: Boolean = true,
+    var accentHex: Int = 0xFF4E8C57.toInt(),
+    var shape: ButtonShape = ButtonShape.ROUND_RECT
 )
 
-enum class ActionType {
-    KEY_HOLD,
-    KEY_TOGGLE,
-    MOUSE_LEFT_ATTACK,
-    MOUSE_RIGHT_PLACE,
-    MOUSE_MIDDLE_PICK,
-    MOUSE_SCROLL_UP,
-    MOUSE_SCROLL_DOWN,
-    HOTBAR_SLOT,
-    GYRO_TOGGLE,
-    CURSOR_TOGGLE,
-    HUD_EDITOR_TOGGLE,
-    QUICK_SETTINGS,
-    PVP_COMBO_MACRO,
-    MACRO_DROP_STACK,
-    MACRO_HITBOXES,
-    MACRO_CHUNK_BORDERS,
-    MACRO_RELOAD_CHUNKS,
-    TOGGLE_HUD_CLEAN,
-    IME_KEYBOARD_TOGGLE,
-    SIDEBAR_DRAWER_TOGGLE
-}
-
 object ControlProfileManager {
-
-    private const val PROFILE_FILENAME = "velocraft_pvp_hud_clean_v3.json"
-    private const val LEGACY_PROFILE_FILENAME = "velocraft_pvp_hud_clean_v2.json"
+    private const val PROFILE_FILENAME = "velocraft_hud_pro_v6.json"
+    private const val CURRENT_SCHEMA_VERSION = 6
 
     @Volatile
-    var lastShareStatusMessage: String = "Siap ekspor / bagikan / impor profil kontrol (.json)"
-
-    val STUDIO_ACCENT_PALETTE: List<Pair<String, Int>> = listOf(
-        "HIJAU STUDIO" to 0xFF4E8C57.toInt(),
-        "TERRACOTTA" to 0xFFC87D55.toInt(),
-        "MERAH KOMBAT" to 0xFFB85448.toInt(),
-        "BIRU BAJA" to 0xFF5A7D9A.toInt(),
-        "EMAS AMBER" to 0xFFB89248.toInt(),
-        "ABU MONOLIT" to 0xFF78736A.toInt()
-    )
+    var lastShareStatusMessage: String =
+        "Format berbagi kontrol: .json standar (Simpan di Android/media/id.xyverse.minecraft/controls/)"
 
     /**
-     * Preset 1: Standar Studio Lengkap (Balanced PvP + Survival + Menu Navigation).
+     * Complete, Mathematically Non-Overlapping PC-to-Mobile Control Layout (v6):
+     * - Verified for 360dp-tall 720p landscape screens (e.g. Redmi A2 1600x720) with >=20dp spacing
+     *   between every button and zero overlap with the Top Telemetry Bar (`y = 4dp..28dp`) or
+     *   the Bottom-Center 9-Slot Hotbar (`drawHotbarBar`).
+     * - Zone 1 (Left 3x3 Symmetrical D-Pad & Mobility Grid):
+     *   Row 1 (`normY = 0.46f`): [SPRINT]   [W]       [OFF (F)]
+     *   Row 2 (`normY = 0.64f`): [A]        [SNEAK]   [D]
+     *   Row 3 (`normY = 0.82f`): [DROP Q]   [S]       [INV (E)]
+     * - Zone 2 (Right Combat & Action Cluster):
+     *   Upper Row (`normY = 0.46f`): [SCRL -]  [SCRL +]  [PICK (M)]  [COMBO]
+     *   Lower Arc (`normY = 0.69f..0.82f`): [ATK (L)]  [PLACE (R)]  [JUMP]
+     * - Zone 3 (Top Utility Toolbar at `normY = 0.135f`, `ROUND_RECT` `15.5dp` radius):
+     *   [ESC] [TAB] [F3] [CAM] [CHAT] [CMD /] [KURSOR] [GYRO] [CLEAN] [EDIT]
      */
     fun createDefaultProPvpLayout(): MutableList<HudButtonConfig> = mutableListOf(
-        // Left-side Movement Cluster (W, A, S, D + Sprint & Sneak)
-        HudButtonConfig("move_w", "W", 0.14f, 0.56f, 30f, 0.80f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_W, accentHex = 0xFF78736A.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("move_s", "S", 0.14f, 0.79f, 30f, 0.80f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_S, accentHex = 0xFF78736A.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("move_a", "A", 0.065f, 0.675f, 30f, 0.80f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_A, accentHex = 0xFF78736A.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("move_d", "D", 0.215f, 0.675f, 30f, 0.80f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_D, accentHex = 0xFF78736A.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("sprint_lock", "SPRINT", 0.14f, 0.41f, 23f, 0.82f, ActionType.KEY_TOGGLE, NativeEngineBridge.KEY_LEFT_CONTROL, isToggle = true, accentHex = 0xFF4E8C57.toInt(), shape = ButtonShape.PILL),
-        HudButtonConfig("sneak_toggle", "SNEAK", 0.06f, 0.87f, 23f, 0.82f, ActionType.KEY_TOGGLE, NativeEngineBridge.KEY_LEFT_SHIFT, isToggle = true, accentHex = 0xFFC87D55.toInt(), shape = ButtonShape.PILL),
+        // =========================================================================
+        // 1. LEFT 3x3 SYMMETRICAL D-PAD & MOBILITY GRID (20dp+ gap on all sides)
+        // =========================================================================
+        // Row 1 (Top of D-Pad: y = 0.46f)
+        HudButtonConfig(
+            id = "btn_sprint",
+            label = "SPRINT",
+            normX = 0.065f,
+            normY = 0.46f,
+            radiusDp = 19.5f,
+            opacity = 0.82f,
+            actionType = ActionType.KEY_TOGGLE,
+            keyCodeOrButton = NativeEngineBridge.KEY_LEFT_CONTROL,
+            isToggle = true,
+            accentHex = 0xFF4E8C57.toInt(),
+            shape = ButtonShape.ROUND_RECT
+        ),
+        HudButtonConfig(
+            id = "btn_w",
+            label = "W",
+            normX = 0.145f,
+            normY = 0.46f,
+            radiusDp = 21.0f,
+            opacity = 0.84f,
+            actionType = ActionType.KEY_HOLD,
+            keyCodeOrButton = NativeEngineBridge.KEY_W,
+            accentHex = 0xFF4E8C57.toInt(),
+            shape = ButtonShape.ROUND_RECT
+        ),
+        HudButtonConfig(
+            id = "btn_offhand",
+            label = "OFF (F)",
+            normX = 0.225f,
+            normY = 0.46f,
+            radiusDp = 19.5f,
+            opacity = 0.82f,
+            actionType = ActionType.KEY_HOLD,
+            keyCodeOrButton = NativeEngineBridge.KEY_F,
+            accentHex = 0xFFC87D55.toInt(),
+            shape = ButtonShape.ROUND_RECT
+        ),
 
-        // Right-side Pro PvP Action Cluster
-        HudButtonConfig("btn_attack", "ATK (L)", 0.82f, 0.64f, 40f, 0.88f, ActionType.MOUSE_LEFT_ATTACK, NativeEngineBridge.MOUSE_LEFT, accentHex = 0xFFB85448.toInt(), shape = ButtonShape.CIRCLE),
-        HudButtonConfig("btn_place", "PLACE (R)", 0.92f, 0.51f, 35f, 0.88f, ActionType.MOUSE_RIGHT_PLACE, NativeEngineBridge.MOUSE_RIGHT, accentHex = 0xFF5A7D9A.toInt(), shape = ButtonShape.CIRCLE),
-        HudButtonConfig("btn_jump", "JUMP", 0.90f, 0.79f, 34f, 0.84f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_SPACE, accentHex = 0xFF4E8C57.toInt(), shape = ButtonShape.CIRCLE),
-        HudButtonConfig("btn_offhand", "OFF (F)", 0.73f, 0.81f, 24f, 0.80f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_F, accentHex = 0xFFB89248.toInt(), shape = ButtonShape.CIRCLE),
-        HudButtonConfig("btn_macro", "COMBO", 0.65f, 0.66f, 25f, 0.82f, ActionType.PVP_COMBO_MACRO, accentHex = 0xFFC87D55.toInt(), shape = ButtonShape.CIRCLE),
-        HudButtonConfig("btn_drop", "DROP (Q)", 0.74f, 0.47f, 22f, 0.76f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_Q, accentHex = 0xFF78736A.toInt(), shape = ButtonShape.CIRCLE),
-        HudButtonConfig("btn_pick", "PICK (M)", 0.83f, 0.41f, 21f, 0.76f, ActionType.MOUSE_MIDDLE_PICK, NativeEngineBridge.MOUSE_MIDDLE, accentHex = 0xFF5A7D9A.toInt(), shape = ButtonShape.CIRCLE),
+        // Row 2 (Middle of D-Pad: y = 0.64f)
+        HudButtonConfig(
+            id = "btn_a",
+            label = "A",
+            normX = 0.065f,
+            normY = 0.64f,
+            radiusDp = 21.0f,
+            opacity = 0.84f,
+            actionType = ActionType.KEY_HOLD,
+            keyCodeOrButton = NativeEngineBridge.KEY_A,
+            accentHex = 0xFF4E8C57.toInt(),
+            shape = ButtonShape.ROUND_RECT
+        ),
+        HudButtonConfig(
+            id = "btn_sneak",
+            label = "SNEAK",
+            normX = 0.145f,
+            normY = 0.64f,
+            radiusDp = 19.5f,
+            opacity = 0.82f,
+            actionType = ActionType.KEY_TOGGLE,
+            keyCodeOrButton = NativeEngineBridge.KEY_LEFT_SHIFT,
+            isToggle = true,
+            accentHex = 0xFFB89248.toInt(),
+            shape = ButtonShape.ROUND_RECT
+        ),
+        HudButtonConfig(
+            id = "btn_d",
+            label = "D",
+            normX = 0.225f,
+            normY = 0.64f,
+            radiusDp = 21.0f,
+            opacity = 0.84f,
+            actionType = ActionType.KEY_HOLD,
+            keyCodeOrButton = NativeEngineBridge.KEY_D,
+            accentHex = 0xFF4E8C57.toInt(),
+            shape = ButtonShape.ROUND_RECT
+        ),
 
-        // Top Utility Bar (MENU, ESC, F3, CAM, KEYB, KURSOR, GYRO, INV, EDIT HUD)
-        HudButtonConfig("btn_settings", "MENU", 0.06f, 0.13f, 19f, 0.84f, ActionType.SIDEBAR_DRAWER_TOGGLE, accentHex = 0xFF4E8C57.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("btn_esc", "ESC", 0.13f, 0.13f, 19f, 0.82f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_ESCAPE, accentHex = 0xFFC87D55.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("btn_f3", "F3", 0.20f, 0.13f, 18f, 0.78f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_F3, accentHex = 0xFF78736A.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("btn_f5", "CAM", 0.27f, 0.13f, 19f, 0.78f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_F5, accentHex = 0xFF78736A.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("btn_chat", "CHAT", 0.34f, 0.13f, 19f, 0.78f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_T, accentHex = 0xFF78736A.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("btn_ime", "KEYB", 0.41f, 0.13f, 19f, 0.82f, ActionType.IME_KEYBOARD_TOGGLE, accentHex = 0xFF5A7D9A.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("btn_cursor", "KURSOR", 0.67f, 0.13f, 20f, 0.84f, ActionType.CURSOR_TOGGLE, isToggle = true, accentHex = 0xFF5A7D9A.toInt(), shape = ButtonShape.PILL),
-        HudButtonConfig("btn_gyro", "GYRO", 0.76f, 0.13f, 19f, 0.80f, ActionType.GYRO_TOGGLE, isToggle = true, accentHex = 0xFF4E8C57.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("btn_inv", "INV (E)", 0.84f, 0.13f, 21f, 0.84f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_E, accentHex = 0xFFB89248.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("btn_edit_hud", "EDIT HUD", 0.93f, 0.13f, 21f, 0.86f, ActionType.HUD_EDITOR_TOGGLE, isToggle = true, accentHex = 0xFFC87D55.toInt(), shape = ButtonShape.PILL)
-    )
+        // Row 3 (Bottom of D-Pad: y = 0.82f)
+        HudButtonConfig(
+            id = "btn_drop",
+            label = "DROP Q",
+            normX = 0.065f,
+            normY = 0.82f,
+            radiusDp = 19.5f,
+            opacity = 0.82f,
+            actionType = ActionType.KEY_HOLD,
+            keyCodeOrButton = NativeEngineBridge.KEY_Q,
+            accentHex = 0xFFB85448.toInt(),
+            shape = ButtonShape.ROUND_RECT
+        ),
+        HudButtonConfig(
+            id = "btn_s",
+            label = "S",
+            normX = 0.145f,
+            normY = 0.82f,
+            radiusDp = 21.0f,
+            opacity = 0.84f,
+            actionType = ActionType.KEY_HOLD,
+            keyCodeOrButton = NativeEngineBridge.KEY_S,
+            accentHex = 0xFF4E8C57.toInt(),
+            shape = ButtonShape.ROUND_RECT
+        ),
+        HudButtonConfig(
+            id = "btn_inv",
+            label = "INV (E)",
+            normX = 0.225f,
+            normY = 0.82f,
+            radiusDp = 19.5f,
+            opacity = 0.84f,
+            actionType = ActionType.KEY_HOLD,
+            keyCodeOrButton = NativeEngineBridge.KEY_E,
+            accentHex = 0xFFB89248.toInt(),
+            shape = ButtonShape.ROUND_RECT
+        ),
 
-    /**
-     * Preset 2: PvP Kompetitif (Claw / 3-4 Jari, Tombol Serang & Makro ekstra besar + Hitbox F3+B).
-     */
-    fun createCompetitivePvpLayout(): MutableList<HudButtonConfig> = mutableListOf(
-        HudButtonConfig("move_w", "W", 0.14f, 0.54f, 32f, 0.82f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_W, accentHex = 0xFF78736A.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("move_s", "S", 0.14f, 0.78f, 32f, 0.82f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_S, accentHex = 0xFF78736A.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("move_a", "A", 0.06f, 0.66f, 32f, 0.82f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_A, accentHex = 0xFF78736A.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("move_d", "D", 0.22f, 0.66f, 32f, 0.82f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_D, accentHex = 0xFF78736A.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("sprint_lock", "SPRINT", 0.14f, 0.38f, 24f, 0.86f, ActionType.KEY_TOGGLE, NativeEngineBridge.KEY_LEFT_CONTROL, isToggle = true, accentHex = 0xFF4E8C57.toInt(), shape = ButtonShape.PILL),
-        HudButtonConfig("sneak_toggle", "SNEAK", 0.06f, 0.88f, 24f, 0.84f, ActionType.KEY_TOGGLE, NativeEngineBridge.KEY_LEFT_SHIFT, isToggle = true, accentHex = 0xFFC87D55.toInt(), shape = ButtonShape.PILL),
+        // =========================================================================
+        // 2. RIGHT ERGONOMIC COMBAT & ACTION CLUSTER
+        // =========================================================================
+        // Upper Utility Sub-Row (aligned with Row 1 of Left D-Pad at y = 0.46f)
+        HudButtonConfig(
+            id = "btn_scroll_up",
+            label = "SCRL -",
+            normX = 0.725f,
+            normY = 0.46f,
+            radiusDp = 17.5f,
+            opacity = 0.78f,
+            actionType = ActionType.MOUSE_SCROLL_UP,
+            accentHex = 0xFF5A7D9A.toInt(),
+            shape = ButtonShape.ROUND_RECT
+        ),
+        HudButtonConfig(
+            id = "btn_scroll_down",
+            label = "SCRL +",
+            normX = 0.795f,
+            normY = 0.46f,
+            radiusDp = 17.5f,
+            opacity = 0.78f,
+            actionType = ActionType.MOUSE_SCROLL_DOWN,
+            accentHex = 0xFF5A7D9A.toInt(),
+            shape = ButtonShape.ROUND_RECT
+        ),
+        HudButtonConfig(
+            id = "btn_pick_block",
+            label = "PICK (M)",
+            normX = 0.865f,
+            normY = 0.46f,
+            radiusDp = 17.5f,
+            opacity = 0.78f,
+            actionType = ActionType.MOUSE_MIDDLE_PICK,
+            accentHex = 0xFF5A7D9A.toInt(),
+            shape = ButtonShape.ROUND_RECT
+        ),
+        HudButtonConfig(
+            id = "btn_combo",
+            label = "COMBO",
+            normX = 0.935f,
+            normY = 0.46f,
+            radiusDp = 17.5f,
+            opacity = 0.80f,
+            actionType = ActionType.PVP_COMBO_MACRO,
+            accentHex = 0xFFC87D55.toInt(),
+            shape = ButtonShape.ROUND_RECT
+        ),
 
-        HudButtonConfig("btn_attack", "ATK (L)", 0.80f, 0.62f, 45f, 0.90f, ActionType.MOUSE_LEFT_ATTACK, NativeEngineBridge.MOUSE_LEFT, accentHex = 0xFFB85448.toInt(), shape = ButtonShape.CIRCLE),
-        HudButtonConfig("btn_place", "PLACE (R)", 0.92f, 0.48f, 38f, 0.90f, ActionType.MOUSE_RIGHT_PLACE, NativeEngineBridge.MOUSE_RIGHT, accentHex = 0xFF5A7D9A.toInt(), shape = ButtonShape.CIRCLE),
-        HudButtonConfig("btn_jump", "JUMP", 0.91f, 0.78f, 36f, 0.86f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_SPACE, accentHex = 0xFF4E8C57.toInt(), shape = ButtonShape.CIRCLE),
-        HudButtonConfig("btn_macro", "COMBO", 0.67f, 0.62f, 28f, 0.88f, ActionType.PVP_COMBO_MACRO, accentHex = 0xFFC87D55.toInt(), shape = ButtonShape.CIRCLE),
-        HudButtonConfig("btn_offhand", "OFF (F)", 0.72f, 0.80f, 26f, 0.84f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_F, accentHex = 0xFFB89248.toInt(), shape = ButtonShape.CIRCLE),
-        HudButtonConfig("btn_f5", "CAM F5", 0.70f, 0.42f, 24f, 0.84f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_F5, accentHex = 0xFF5A7D9A.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("btn_hitbox", "HITBOX", 0.81f, 0.38f, 21f, 0.80f, ActionType.MACRO_HITBOXES, accentHex = 0xFFB89248.toInt(), shape = ButtonShape.PILL),
+        // Main Combat & Jump Arc (generous 30dp+ clearance between buttons)
+        HudButtonConfig(
+            id = "btn_attack",
+            label = "ATK (L)",
+            normX = 0.755f,
+            normY = 0.73f,
+            radiusDp = 25.0f,
+            opacity = 0.86f,
+            actionType = ActionType.MOUSE_LEFT_ATTACK,
+            accentHex = 0xFFC87D55.toInt(),
+            shape = ButtonShape.CIRCLE
+        ),
+        HudButtonConfig(
+            id = "btn_place",
+            label = "PLACE (R)",
+            normX = 0.845f,
+            normY = 0.82f,
+            radiusDp = 23.0f,
+            opacity = 0.86f,
+            actionType = ActionType.MOUSE_RIGHT_PLACE,
+            accentHex = 0xFFB89248.toInt(),
+            shape = ButtonShape.CIRCLE
+        ),
+        HudButtonConfig(
+            id = "btn_jump",
+            label = "JUMP",
+            normX = 0.930f,
+            normY = 0.69f,
+            radiusDp = 25.0f,
+            opacity = 0.86f,
+            actionType = ActionType.KEY_HOLD,
+            keyCodeOrButton = NativeEngineBridge.KEY_SPACE,
+            accentHex = 0xFF4E8C57.toInt(),
+            shape = ButtonShape.CIRCLE
+        ),
 
-        HudButtonConfig("btn_settings", "MENU", 0.06f, 0.13f, 19f, 0.82f, ActionType.SIDEBAR_DRAWER_TOGGLE, accentHex = 0xFF4E8C57.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("btn_esc", "ESC", 0.13f, 0.13f, 19f, 0.82f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_ESCAPE, accentHex = 0xFFC87D55.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("btn_ime", "KEYB", 0.20f, 0.13f, 19f, 0.82f, ActionType.IME_KEYBOARD_TOGGLE, accentHex = 0xFF5A7D9A.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("btn_cursor", "KURSOR", 0.67f, 0.13f, 20f, 0.84f, ActionType.CURSOR_TOGGLE, isToggle = true, accentHex = 0xFF5A7D9A.toInt(), shape = ButtonShape.PILL),
-        HudButtonConfig("btn_gyro", "GYRO", 0.76f, 0.13f, 19f, 0.82f, ActionType.GYRO_TOGGLE, isToggle = true, accentHex = 0xFF4E8C57.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("btn_inv", "INV (E)", 0.84f, 0.13f, 21f, 0.84f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_E, accentHex = 0xFFB89248.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("btn_edit_hud", "EDIT HUD", 0.93f, 0.13f, 21f, 0.86f, ActionType.HUD_EDITOR_TOGGLE, isToggle = true, accentHex = 0xFFC87D55.toInt(), shape = ButtonShape.PILL)
-    ).apply {
-        forEach { if (it.id == "move_s") it.accentHex = 0xFF78736A.toInt() }
-    }
-
-    /**
-     * Preset 3: Builder & Survival Minimalis (Layar lega, opasitas ringan + Scroll & Pick Block).
-     */
-    fun createBuilderMinimalLayout(): MutableList<HudButtonConfig> = mutableListOf(
-        HudButtonConfig("move_w", "W", 0.13f, 0.58f, 28f, 0.65f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_W, accentHex = 0xFF78736A.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("move_s", "S", 0.13f, 0.80f, 28f, 0.65f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_S, accentHex = 0xFF78736A.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("move_a", "A", 0.06f, 0.69f, 28f, 0.65f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_A, accentHex = 0xFF78736A.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("move_d", "D", 0.20f, 0.69f, 28f, 0.65f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_D, accentHex = 0xFF78736A.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("sprint_lock", "SPRINT", 0.13f, 0.44f, 21f, 0.68f, ActionType.KEY_TOGGLE, NativeEngineBridge.KEY_LEFT_CONTROL, isToggle = true, accentHex = 0xFF4E8C57.toInt(), shape = ButtonShape.PILL),
-        HudButtonConfig("sneak_toggle", "SNEAK", 0.055f, 0.88f, 21f, 0.68f, ActionType.KEY_TOGGLE, NativeEngineBridge.KEY_LEFT_SHIFT, isToggle = true, accentHex = 0xFFC87D55.toInt(), shape = ButtonShape.PILL),
-
-        HudButtonConfig("btn_attack", "HANCUR (L)", 0.83f, 0.66f, 36f, 0.72f, ActionType.MOUSE_LEFT_ATTACK, NativeEngineBridge.MOUSE_LEFT, accentHex = 0xFFB85448.toInt(), shape = ButtonShape.CIRCLE),
-        HudButtonConfig("btn_place", "PASANG (R)", 0.92f, 0.52f, 36f, 0.72f, ActionType.MOUSE_RIGHT_PLACE, NativeEngineBridge.MOUSE_RIGHT, accentHex = 0xFF5A7D9A.toInt(), shape = ButtonShape.CIRCLE),
-        HudButtonConfig("btn_jump", "JUMP", 0.91f, 0.79f, 32f, 0.70f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_SPACE, accentHex = 0xFF4E8C57.toInt(), shape = ButtonShape.CIRCLE),
-        HudButtonConfig("btn_pick", "PICK", 0.82f, 0.44f, 22f, 0.68f, ActionType.MOUSE_MIDDLE_PICK, NativeEngineBridge.MOUSE_MIDDLE, accentHex = 0xFFB89248.toInt(), shape = ButtonShape.CIRCLE),
-        HudButtonConfig("btn_scroll_up", "SCRL -", 0.73f, 0.52f, 20f, 0.65f, ActionType.MOUSE_SCROLL_UP, accentHex = 0xFF78736A.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("btn_scroll_dn", "SCRL +", 0.73f, 0.66f, 20f, 0.65f, ActionType.MOUSE_SCROLL_DOWN, accentHex = 0xFF78736A.toInt(), shape = ButtonShape.ROUND_RECT),
-
-        HudButtonConfig("btn_settings", "MENU", 0.06f, 0.13f, 18f, 0.72f, ActionType.SIDEBAR_DRAWER_TOGGLE, accentHex = 0xFF4E8C57.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("btn_esc", "ESC", 0.13f, 0.13f, 18f, 0.72f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_ESCAPE, accentHex = 0xFFC87D55.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("btn_ime", "KEYB", 0.20f, 0.13f, 18f, 0.75f, ActionType.IME_KEYBOARD_TOGGLE, accentHex = 0xFF5A7D9A.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("btn_cursor", "KURSOR", 0.73f, 0.13f, 19f, 0.75f, ActionType.CURSOR_TOGGLE, isToggle = true, accentHex = 0xFF5A7D9A.toInt(), shape = ButtonShape.PILL),
-        HudButtonConfig("btn_inv", "INV (E)", 0.83f, 0.13f, 20f, 0.75f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_E, accentHex = 0xFFB89248.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("btn_edit_hud", "EDIT HUD", 0.93f, 0.13f, 20f, 0.78f, ActionType.HUD_EDITOR_TOGGLE, isToggle = true, accentHex = 0xFFC87D55.toInt(), shape = ButtonShape.PILL)
+        // =========================================================================
+        // 3. TOP UTILITY TOOLBAR (10 uniform 31dp x 31dp ROUND_RECT buttons at y = 0.135f)
+        // =========================================================================
+        HudButtonConfig(
+            id = "btn_esc",
+            label = "ESC",
+            normX = 0.060f,
+            normY = 0.135f,
+            radiusDp = 15.5f,
+            opacity = 0.78f,
+            actionType = ActionType.KEY_HOLD,
+            keyCodeOrButton = NativeEngineBridge.KEY_ESCAPE,
+            accentHex = 0xFFB85448.toInt(),
+            shape = ButtonShape.ROUND_RECT
+        ),
+        HudButtonConfig(
+            id = "btn_tab",
+            label = "TAB",
+            normX = 0.155f,
+            normY = 0.135f,
+            radiusDp = 15.5f,
+            opacity = 0.78f,
+            actionType = ActionType.KEY_HOLD,
+            keyCodeOrButton = NativeEngineBridge.KEY_TAB,
+            accentHex = 0xFF5A7D9A.toInt(),
+            shape = ButtonShape.ROUND_RECT
+        ),
+        HudButtonConfig(
+            id = "btn_f3",
+            label = "F3",
+            normX = 0.250f,
+            normY = 0.135f,
+            radiusDp = 15.5f,
+            opacity = 0.78f,
+            actionType = ActionType.KEY_HOLD,
+            keyCodeOrButton = NativeEngineBridge.KEY_F3,
+            accentHex = 0xFF78736A.toInt(),
+            shape = ButtonShape.ROUND_RECT
+        ),
+        HudButtonConfig(
+            id = "btn_f5",
+            label = "CAM",
+            normX = 0.345f,
+            normY = 0.135f,
+            radiusDp = 15.5f,
+            opacity = 0.78f,
+            actionType = ActionType.KEY_HOLD,
+            keyCodeOrButton = NativeEngineBridge.KEY_F5,
+            accentHex = 0xFF78736A.toInt(),
+            shape = ButtonShape.ROUND_RECT
+        ),
+        HudButtonConfig(
+            id = "btn_chat",
+            label = "CHAT",
+            normX = 0.440f,
+            normY = 0.135f,
+            radiusDp = 15.5f,
+            opacity = 0.78f,
+            actionType = ActionType.KEY_HOLD,
+            keyCodeOrButton = NativeEngineBridge.KEY_T,
+            accentHex = 0xFF78736A.toInt(),
+            shape = ButtonShape.ROUND_RECT
+        ),
+        HudButtonConfig(
+            id = "btn_slash",
+            label = "CMD /",
+            normX = 0.535f,
+            normY = 0.135f,
+            radiusDp = 15.5f,
+            opacity = 0.78f,
+            actionType = ActionType.KEY_HOLD,
+            keyCodeOrButton = NativeEngineBridge.KEY_SLASH,
+            accentHex = 0xFF5A7D9A.toInt(),
+            shape = ButtonShape.ROUND_RECT
+        ),
+        HudButtonConfig(
+            id = "btn_cursor",
+            label = "KURSOR",
+            normX = 0.635f,
+            normY = 0.135f,
+            radiusDp = 15.5f,
+            opacity = 0.80f,
+            actionType = ActionType.CURSOR_TOGGLE,
+            isToggle = true,
+            accentHex = 0xFF4E8C57.toInt(),
+            shape = ButtonShape.ROUND_RECT
+        ),
+        HudButtonConfig(
+            id = "btn_gyro",
+            label = "GYRO",
+            normX = 0.735f,
+            normY = 0.135f,
+            radiusDp = 15.5f,
+            opacity = 0.78f,
+            actionType = ActionType.GYRO_TOGGLE,
+            isToggle = true,
+            accentHex = 0xFF4E8C57.toInt(),
+            shape = ButtonShape.ROUND_RECT
+        ),
+        HudButtonConfig(
+            id = "btn_clean_hud",
+            label = "CLEAN",
+            normX = 0.835f,
+            normY = 0.135f,
+            radiusDp = 15.5f,
+            opacity = 0.78f,
+            actionType = ActionType.TOGGLE_HUD_CLEAN,
+            isToggle = true,
+            accentHex = 0xFF78736A.toInt(),
+            shape = ButtonShape.ROUND_RECT
+        ),
+        HudButtonConfig(
+            id = "btn_edit_hud",
+            label = "EDIT",
+            normX = 0.935f,
+            normY = 0.135f,
+            radiusDp = 15.5f,
+            opacity = 0.82f,
+            actionType = ActionType.HUD_EDITOR_TOGGLE,
+            isToggle = true,
+            accentHex = 0xFFC87D55.toInt(),
+            shape = ButtonShape.ROUND_RECT
+        )
     )
 
     fun getExternalControlsDir(context: Context): File {
@@ -172,10 +418,9 @@ object ControlProfileManager {
 
     fun loadLayout(context: Context): MutableList<HudButtonConfig> {
         val file = File(context.filesDir, PROFILE_FILENAME)
-        val sourceFile = if (file.exists()) file else File(context.filesDir, LEGACY_PROFILE_FILENAME)
-        if (!sourceFile.exists()) return createDefaultProPvpLayout()
+        if (!file.exists()) return createDefaultProPvpLayout()
 
-        val parsed = parseLayoutFromJson(sourceFile.readText())
+        val parsed = parseLayoutFromJson(file.readText())
         return if (parsed != null && parsed.isNotEmpty()) parsed else createDefaultProPvpLayout()
     }
 
@@ -190,14 +435,14 @@ object ControlProfileManager {
             val list = mutableListOf<HudButtonConfig>()
             for (i in 0 until arr.length()) {
                 val obj = arr.getJSONObject(i)
-                val shapeName = obj.optString("shape", ButtonShape.CIRCLE.name)
-                val parsedShape = try {
+                val shapeName = obj.optString("shape", ButtonShape.ROUND_RECT.name)
+                val resolvedShape = try {
                     ButtonShape.valueOf(shapeName)
                 } catch (_: Exception) {
-                    ButtonShape.CIRCLE
+                    ButtonShape.ROUND_RECT
                 }
                 val actionName = obj.optString("actionType", ActionType.KEY_HOLD.name)
-                val parsedAction = try {
+                val resolvedAction = try {
                     ActionType.valueOf(actionName)
                 } catch (_: Exception) {
                     ActionType.KEY_HOLD
@@ -205,17 +450,17 @@ object ControlProfileManager {
                 list.add(
                     HudButtonConfig(
                         id = obj.optString("id", "btn_$i"),
-                        label = obj.optString("label", "BTN"),
+                        label = obj.optString("label", "KEY"),
                         normX = obj.optDouble("normX", 0.5).toFloat().coerceIn(0.03f, 0.97f),
                         normY = obj.optDouble("normY", 0.5).toFloat().coerceIn(0.05f, 0.95f),
-                        radiusDp = obj.optDouble("radiusDp", 24.0).toFloat().coerceIn(14f, 64f),
-                        opacity = obj.optDouble("opacity", 0.78).toFloat().coerceIn(0.08f, 1.0f),
-                        actionType = parsedAction,
+                        radiusDp = obj.optDouble("radiusDp", 20.0).toFloat().coerceIn(14f, 68f),
+                        opacity = obj.optDouble("opacity", 0.80).toFloat().coerceIn(0.08f, 1.0f),
+                        actionType = resolvedAction,
                         keyCodeOrButton = obj.optInt("keyCodeOrButton", 0),
                         isToggle = obj.optBoolean("isToggle", false),
-                        accentHex = obj.optInt("accentHex", 0xFF78736A.toInt()),
-                        shape = parsedShape,
-                        isVisible = obj.optBoolean("isVisible", true)
+                        isVisible = obj.optBoolean("isVisible", true),
+                        accentHex = obj.optInt("accentHex", 0xFF4E8C57.toInt()),
+                        shape = resolvedShape
                     )
                 )
             }
@@ -225,136 +470,186 @@ object ControlProfileManager {
         }
     }
 
-    fun serializeLayoutToJson(buttons: List<HudButtonConfig>, profileName: String = "XyverseProHUD"): String {
+    fun serializeLayoutToJson(
+        buttons: List<HudButtonConfig>,
+        profileName: String = "Xyverse Pro HUD"
+    ): String {
+        val root = JSONObject()
+        root.put("schema", "id.xyverse.minecraft.controls")
+        root.put("version", CURRENT_SCHEMA_VERSION)
+        root.put("profileName", profileName)
+        root.put("exportedAt", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date()))
+
         val arr = JSONArray()
-        for (b in buttons) {
-            arr.put(JSONObject().apply {
-                put("id", b.id)
-                put("label", b.label)
-                put("normX", b.normX)
-                put("normY", b.normY)
-                put("radiusDp", b.radiusDp)
-                put("opacity", b.opacity)
-                put("actionType", b.actionType.name)
-                put("keyCodeOrButton", b.keyCodeOrButton)
-                put("isToggle", b.isToggle)
-                put("accentHex", b.accentHex)
-                put("shape", b.shape.name)
-                put("isVisible", b.isVisible)
-            })
+        for (btn in buttons) {
+            val obj = JSONObject().apply {
+                put("id", btn.id)
+                put("label", btn.label)
+                put("normX", btn.normX.toDouble())
+                put("normY", btn.normY.toDouble())
+                put("radiusDp", btn.radiusDp.toDouble())
+                put("opacity", btn.opacity.toDouble())
+                put("actionType", btn.actionType.name)
+                put("keyCodeOrButton", btn.keyCodeOrButton)
+                put("isToggle", btn.isToggle)
+                put("isVisible", btn.isVisible)
+                put("accentHex", btn.accentHex)
+                put("shape", btn.shape.name)
+            }
+            arr.put(obj)
         }
-        val wrapper = JSONObject().apply {
-            put("schema", "id.xyverse.minecraft.controls.v3")
-            put("profileName", profileName)
-            put("exportedAtMs", System.currentTimeMillis())
-            put("buttonCount", buttons.size)
-            put("buttons", arr)
-        }
-        return wrapper.toString(2)
+        root.put("buttons", arr)
+        return root.toString(2)
     }
 
     fun saveLayout(context: Context, buttons: List<HudButtonConfig>) {
-        val jsonStr = serializeLayoutToJson(buttons, "ActiveProfile")
+        val jsonStr = serializeLayoutToJson(buttons)
         File(context.filesDir, PROFILE_FILENAME).writeText(jsonStr)
     }
 
+    fun resetLayout(context: Context): MutableList<HudButtonConfig> {
+        File(context.filesDir, PROFILE_FILENAME).delete()
+        return createDefaultProPvpLayout().also { saveLayout(context, it) }
+    }
+
     /**
-     * Exports the current control profile `.json` to `Android/media/id.xyverse.minecraft/controls/`,
-     * copies the JSON to the Android Clipboard, and optionally opens the Android Share Sheet (`ACTION_SEND`).
+     * Exports current HUD layout as a `.json` file inside
+     * `Android/media/id.xyverse.minecraft/controls/<name>.json`, copies JSON to clipboard,
+     * and optionally launches Android's native Share Sheet (`ACTION_SEND`).
      */
     fun exportAndShareLayoutJson(
         context: Context,
         buttons: List<HudButtonConfig>,
-        profileName: String = "kontrol-custom",
+        customName: String = "xyverse_pro_hud",
         openShareSheet: Boolean = true
     ): String {
-        val safeName = profileName
-            .replace(Regex("[^a-zA-Z0-9_-]"), "-")
-            .trim('-')
-            .ifEmpty { "kontrol-custom" }
-        val fileName = if (safeName.endsWith(".json", ignoreCase = true)) safeName else "$safeName.json"
-
-        val jsonText = serializeLayoutToJson(buttons, safeName)
+        val safeSlug = customName.lowercase(Locale.ROOT)
+            .replace(Regex("[^a-z0-9_-]"), "_")
+            .trim('_')
+            .ifBlank { "xyverse_controls" }
+        val fileName = if (safeSlug.endsWith(".json")) safeSlug else "$safeSlug.json"
         val outDir = getExternalControlsDir(context)
         val outFile = File(outDir, fileName)
+
+        val jsonText = serializeLayoutToJson(buttons, safeSlug)
         outFile.writeText(jsonText)
 
         try {
-            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-            cm?.setPrimaryClip(ClipData.newPlainText("Minecraft Control JSON ($fileName)", jsonText))
+            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            cm.setPrimaryClip(ClipData.newPlainText("XyverseControlsJson", jsonText))
         } catch (_: Exception) {
         }
 
+        lastShareStatusMessage = "Diekspor ke: ${outFile.absolutePath} (& disalin ke Clipboard)"
+        VeloLogger.info("CONTROLS-JSON", "Control profile exported to ${outFile.absolutePath}")
+
         if (openShareSheet) {
             try {
+                val uri = FileProvider.getUriForFile(
+                    context,
+                    "${context.packageName}.fileprovider",
+                    outFile
+                )
                 val shareIntent = Intent(Intent.ACTION_SEND).apply {
                     type = "application/json"
-                    putExtra(Intent.EXTRA_TITLE, "Profil Kontrol Minecraft ($fileName)")
-                    putExtra(Intent.EXTRA_SUBJECT, fileName)
+                    putExtra(Intent.EXTRA_SUBJECT, "Profil Kontrol Minecraft ($fileName)")
                     putExtra(Intent.EXTRA_TEXT, jsonText)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
-                val chooser = Intent.createChooser(shareIntent, "Bagikan Profil Kontrol JSON").apply {
+                val chooser = Intent.createChooser(shareIntent, "Bagikan Profil Kontrol (.json)").apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
                 context.startActivity(chooser)
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                VeloLogger.warn("CONTROLS-JSON", "Share sheet fallback to text: ${e.message}")
             }
         }
 
-        lastShareStatusMessage = "Diekspor & disalin: ${outFile.absolutePath}"
-        VeloLogger.section("CONTROLS", "Exported control profile JSON (${buttons.size} buttons) -> ${outFile.absolutePath}")
         return outFile.absolutePath
-    }
-
-    fun importLayoutFromClipboard(context: Context): Pair<Boolean, String> {
-        return try {
-            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-            val clipText = cm?.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString() ?: ""
-            if (clipText.isBlank()) {
-                val msg = "Clipboard kosong. Salin teks .json kontrol terlebih dahulu."
-                lastShareStatusMessage = msg
-                return false to msg
-            }
-            val parsed = parseLayoutFromJson(clipText)
-            if (parsed == null || parsed.isEmpty()) {
-                val msg = "Isi Clipboard bukan format .json kontrol yang valid."
-                lastShareStatusMessage = msg
-                return false to msg
-            }
-            saveLayout(context, parsed)
-            val msg = "Berhasil mengimpor ${parsed.size} tombol kontrol dari Clipboard!"
-            lastShareStatusMessage = msg
-            VeloLogger.section("CONTROLS", msg)
-            true to msg
-        } catch (t: Throwable) {
-            val msg = "Gagal impor dari Clipboard: ${t.message?.take(45)}"
-            lastShareStatusMessage = msg
-            false to msg
-        }
     }
 
     fun listSavedExternalJsonProfiles(context: Context): List<File> {
         val dir = getExternalControlsDir(context)
-        val files = dir.listFiles { f -> f.isFile && f.extension.equals("json", ignoreCase = true) }
-            ?: return emptyList()
-        return files.sortedByDescending { it.lastModified() }
+        return dir.listFiles { f -> f.isFile && f.name.endsWith(".json", ignoreCase = true) }
+            ?.sortedByDescending { it.lastModified() }
+            ?: emptyList()
+    }
+
+    fun importLayoutFromClipboard(context: Context): Pair<Boolean, String> {
+        return try {
+            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            val clip = cm.primaryClip
+            if (clip == null || clip.itemCount == 0) {
+                return false to "Clipboard kosong. Salin teks .json kontrol terlebih dahulu."
+            }
+            val raw = clip.getItemAt(0).coerceToText(context)?.toString()?.trim().orEmpty()
+            val parsed = parseLayoutFromJson(raw)
+                ?: return false to "Format teks di Clipboard bukan JSON kontrol yang valid."
+            saveLayout(context, parsed)
+            val autoSavedFile = File(getExternalControlsDir(context), "imported_clipboard.json")
+            autoSavedFile.writeText(serializeLayoutToJson(parsed, "Imported Clipboard"))
+            lastShareStatusMessage = "Berhasil impor ${parsed.size} tombol dari Clipboard (.json)!"
+            true to lastShareStatusMessage
+        } catch (e: Exception) {
+            false to "Gagal impor dari Clipboard: ${e.message}"
+        }
     }
 
     fun importLayoutFromFile(context: Context, file: File): Pair<Boolean, String> {
         return try {
-            if (!file.exists()) return false to "File tidak ditemukan: ${file.name}"
+            if (!file.exists()) return false to "File ${file.name} tidak ditemukan."
             val parsed = parseLayoutFromJson(file.readText())
-                ?: return false to "Format JSON tidak valid di ${file.name}"
+                ?: return false to "File ${file.name} bukan format JSON kontrol yang valid."
             saveLayout(context, parsed)
-            val msg = "Berhasil memuat profil '${file.name}' (${parsed.size} tombol)!"
-            lastShareStatusMessage = msg
-            VeloLogger.section("CONTROLS", msg)
-            true to msg
-        } catch (t: Throwable) {
-            val msg = "Gagal memuat ${file.name}: ${t.message}"
-            lastShareStatusMessage = msg
-            false to msg
+            lastShareStatusMessage = "Profil '${file.name}' (${parsed.size} tombol) berhasil dimuat!"
+            true to lastShareStatusMessage
+        } catch (e: Exception) {
+            false to "Gagal membaca ${file.name}: ${e.message}"
         }
+    }
+
+    /**
+     * Applies one of 3 built-in ergonomic presets:
+     * 0 = Standard Pro (Balanced 2-Thumb 3x3 D-Pad + Right Arc)
+     * 1 = 4-Finger Claw PvP (Attack & Jump raised for index fingers)
+     * 2 = Compact Builder / Survival (Slightly smaller buttons for maximum field of view)
+     */
+    fun applyPreset(context: Context, presetIndex: Int): MutableList<HudButtonConfig> {
+        val base = createDefaultProPvpLayout()
+        when (presetIndex) {
+            1 -> {
+                // 4-Finger Claw PvP: Move Attack & Combo to top-left/top-right index finger zones
+                base.find { it.id == "btn_attack" }?.apply {
+                    normX = 0.78f
+                    normY = 0.30f
+                    radiusDp = 26f
+                }
+                base.find { it.id == "btn_jump" }?.apply {
+                    normX = 0.91f
+                    normY = 0.30f
+                    radiusDp = 25f
+                }
+                base.find { it.id == "btn_place" }?.apply {
+                    normX = 0.85f
+                    normY = 0.74f
+                    radiusDp = 25f
+                }
+                base.find { it.id == "btn_combo" }?.apply {
+                    normX = 0.74f
+                    normY = 0.74f
+                    radiusDp = 21f
+                }
+            }
+            2 -> {
+                // Compact Builder / Survival: Clean, low-profile buttons
+                base.forEach { btn ->
+                    btn.radiusDp = (btn.radiusDp * 0.90f).coerceAtLeast(15f)
+                    btn.opacity = (btn.opacity * 0.85f).coerceIn(0.15f, 1.0f)
+                }
+            }
+        }
+        saveLayout(context, base)
+        return base
     }
 }

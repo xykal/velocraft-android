@@ -14,7 +14,7 @@ on:
       release_tag:
         description: "Tag versi untuk Draft Release"
         required: false
-        default: "v0.8.2-release"
+        default: "v0.8.3-release"
       create_draft_release:
         description: "Buat / Update Draft Release otomatis setelah build selesai"
         required: false
@@ -31,7 +31,7 @@ concurrency:
 
 jobs:
   build-and-draft-release:
-    name: Build Official Signed Release APKs (id.xyverse.minecraft - v0.8.2-release)
+    name: Build Official Signed Release APKs (id.xyverse.minecraft - v0.8.3-release)
     runs-on: ubuntu-latest
     if: >-
       github.event.repository.fork == false &&
@@ -120,26 +120,26 @@ jobs:
         run: |
           gradle :app:assembleRelease --no-daemon
           mkdir -p dist-apks
-          cp app/build/outputs/apk/release/app-arm64-v8a-release.apk dist-apks/Minecraft-Xyverse-v0.8.2-arm64-v8a-official-signed.apk
-          cp app/build/outputs/apk/release/app-armeabi-v7a-release.apk dist-apks/Minecraft-Xyverse-v0.8.2-armeabi-v7a-official-signed.apk
-          cp app/build/outputs/apk/release/app-universal-release.apk dist-apks/Minecraft-Xyverse-v0.8.2-universal-official-signed.apk
+          cp app/build/outputs/apk/release/app-arm64-v8a-release.apk dist-apks/Minecraft-Xyverse-v0.8.3-arm64-v8a-official-signed.apk
+          cp app/build/outputs/apk/release/app-armeabi-v7a-release.apk dist-apks/Minecraft-Xyverse-v0.8.3-armeabi-v7a-official-signed.apk
+          cp app/build/outputs/apk/release/app-universal-release.apk dist-apks/Minecraft-Xyverse-v0.8.3-universal-official-signed.apk
           cp app/keystore/xyverse-official-release.p12 dist-apks/xyverse-official-release.p12
 
           # Verify Official v1/v2/v3 APK Signature & Certificate Subject
           APKSIGNER="$ANDROID_HOME/build-tools/34.0.0/apksigner"
-          "$APKSIGNER" verify --verbose --print-certs dist-apks/Minecraft-Xyverse-v0.8.2-arm64-v8a-official-signed.apk
+          "$APKSIGNER" verify --verbose --print-certs dist-apks/Minecraft-Xyverse-v0.8.3-arm64-v8a-official-signed.apk
 
-          # Fetch Real Android OpenJDK 17 HotSpot Runtimes (libjli.so + libjvm.so + modules) for Release Mirror
-          curl -fL "https://github.com/PojavLauncherTeam/android-openjdk-build-multiarch/releases/download/jre17-ec28559/jre17-arm64-20210825-release.tar.xz" \
+          # Fetch Self-Hosted Real Android OpenJDK 17 HotSpot Runtimes from xykal/velocraft-android
+          curl -fL "https://github.com/xykal/velocraft-android/releases/download/runtime-openjdk17/velocraft-openjdk17-arm64-v8a.tar.xz" \
             -o dist-apks/jre-arm64-v8a-openjdk.tar.xz
-          curl -fL "https://github.com/PojavLauncherTeam/android-openjdk-build-multiarch/releases/download/jre17-ec28559/jre17-arm-20210914-release.tar.xz" \
+          curl -fL "https://github.com/xykal/velocraft-android/releases/download/runtime-openjdk17/velocraft-openjdk17-armeabi-v7a.tar.xz" \
             -o dist-apks/jre-armeabi-v7a-openjdk.tar.xz
           ls -lh dist-apks/
 
       - name: Upload Official Signed Release APK & OpenJDK Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Minecraft-Xyverse-Official-Signed-v0.8.2-release
+          name: Minecraft-Xyverse-Official-Signed-v0.8.3-release
           path: |
             dist-apks/*.apk
             dist-apks/*.tar.xz
@@ -150,34 +150,36 @@ jobs:
         if: ${{ github.event_name == 'push' || inputs.create_draft_release == true }}
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.release_tag || 'v0.8.2-release' }}
-          name: "Minecraft (Official Signed Release ${{ inputs.release_tag || 'v0.8.2-release' }} - id.xyverse.minecraft) [DRAFT]"
+          tag_name: ${{ inputs.release_tag || 'v0.8.3-release' }}
+          name: "Minecraft (Official Signed Release ${{ inputs.release_tag || 'v0.8.3-release' }} - id.xyverse.minecraft) [DRAFT]"
           draft: true
           prerelease: false
           generate_release_notes: true
           body: |
-            ### Minecraft - Java Porting Edition (`v0.8.2-release` Official Signed) [DRAFT]
+            ### Minecraft - Java Porting Edition (`v0.8.3-release` Official Signed) [DRAFT]
             - **Package ID Resmi:** **`id.xyverse.minecraft`**
             - **Sertifikat Keystore Produksi (v1 + v2 + v3 Signed):**
               - **SHA-256 Fingerprint:** `F2:BF:14:62:F1:F8:02:BA:3D:6A:29:78:B3:11:D4:5F:39:13:81:21:13:24:4B:A4:90:D9:AF:7A:43:D7:22:61`
 
-            #### Pembaruan Utama di `v0.8.2-release`:
-            1. **Perbaikan Total `GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT` Saat Mojang Splash Muncul:**
-               - Menghapus variabel lingkungan `LIBGL_SHRINK=2` (`unsetenv("LIBGL_SHRINK")`) yang pada `libgl4es_114.so` (`src/gl/framebuffers.c`) memicu bug `unshrinking shrinked texture for FBO` (`tex->width *= 1<<tex->shrink`), sehingga ukuran tekstur Color dan Depth FBO `WindowFramebuffer` (`net.minecraft.class_6364`) tidak sinkron di GPU PowerVR GE8320 (`GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT`).
-               - Membersihkan file `hs_err_pid*.log` lama sebelum peluncuran JVM agar log crash dari sesi sebelumnya tidak pernah muncul kembali, serta menghapus baris komentar `#` pada `.minecraft/options.txt` (`.velocraft_turbo_v082`).
-            2. **Mesin Ikon Vektor Kustom Baru (`VeloVectorIcons.kt`) di Seluruh UI & Semua Tombol Kontrol In-Game:**
-               - **Semua Tombol Kontrol In-Game (`ProHudOverlayView`)**: Setiap tombol kontrol (`W`, `A`, `S`, `D`, `ATK`, `PLACE`, `JUMP`, `SNEAK`, `SPRINT`, `INV`, `OFF`, `COMBO`, `DROP`, `PICK`, `MENU`, `ESC`, `F3`, `CAM`, `CHAT`, `KEYB`, `KURSOR`, `GYRO`, `EDIT HUD`) kini memiliki ikon vektor taktis berlapis (Panah Berkembar Aerodinamis, Pedang Berlian 45° + Retikel, Kubus Voxel 3D + Spark `+`, Peti Harta 3D, Perisai Offhand, Gimbal Gyro 3D, Keycap Mekanikal, Lensa Kamera, dll.) lengkap dengan pendaran halo lembut dan badge label presisi.
-               - **Semua Layar UI (`MainMenuView`, `BootLogOverlayView`, `CustomCanvasModalView`, Top Telemetry Bar & Sidebar)**: Seluruh ikon navigasi, pod telemetri, tab modal pengaturan, dan tombol cepat Top Bar diperbarui menggunakan `VeloVectorIcons` multi-layer.
+            #### Pembaruan Utama di `v0.8.3-release`:
+            1. **Perbaikan Total Garis-Garis ("Block Lines / Seams") di Dunia 3D:**
+               - Menghapus `LIBGL_NOHIGHP=1` (`unsetenv("LIBGL_NOHIGHP")`), mengaktifkan `LIBGL_MIPMAP=0`, serta memilih konfigurasi `EGL_DEPTH_SIZE, 24` dengan fallback 16-bit agar koordinat tekstur UV blok menggunakan presisi `highp float` 32-bit penuh di PowerVR GE8320 tanpa *bleeding* garis antar blok.
+            2. **Tata Letak UI & Kontrol Default Lengkap (`WASD` + 3x3 D-Pad + Combat Cluster) Tanpa Tumpang Tindih:**
+               - Merapikan seluruh tata letak UI & HUD (`velocraft_hud_pro_v6.json`) dengan jarak bebas >=20dp di layar 360dp (720p landscape): Grid D-Pad 3x3 simetris di kiri (`SPRINT`, `W`, `OFF (F)` / `A`, `SNEAK`, `D` / `DROP Q`, `S`, `INV (E)`), klaster tempur di kanan (`SCRL -`, `SCRL +`, `PICK (M)`, `COMBO`, `ATK (L)`, `PLACE (R)`, `JUMP`), dan baris utilitas atas (`ESC`, `TAB`, `F3`, `CAM`, `CHAT`, `CMD /`, `KURSOR`, `GYRO`, `CLEAN`, `EDIT`).
+            3. **Hub Konten 4 Kategori (`MODS`, `SHADER`, `TEKSTUR / RP`, `MAP & DUNIA`) + Pagination `+30 Item`:**
+               - Menambahkan katalog kurasi + pencarian & pemuatan langsung dari server Modrinth untuk **Mod (`.jar`)**, **Shaderpack (`.zip`)**, **Resource Pack / Tekstur (`.zip` otomatis aktif di `options.txt`)**, dan **Map / Dunia (`.zip` otomatis diekstrak ke `.minecraft/saves/`)**.
+            4. **100% Penamaan, Simbol JNI (`veloc*` / `VelocRendererInit` / `libvelocexec.so`) & URL Runtime Mandiri:**
+               - Seluruh pustaka, simbol bytecode `lwjgl-glfw-classes.jar`, dan URL unduhan OpenJDK 17 (`xykal/velocraft-android/releases/download/runtime-openjdk17/...`) kini 100% menggunakan aset dan penamaan internal sendiri.
 
             #### Pilihan File APK Resmi (`id.xyverse.minecraft`):
-            - **`Minecraft-Xyverse-v0.8.2-arm64-v8a-official-signed.apk`** *(Khusus HP 64-bit)*
-            - **`Minecraft-Xyverse-v0.8.2-armeabi-v7a-official-signed.apk`** *(Khusus HP 32-bit seperti Redmi A2)*
-            - **`Minecraft-Xyverse-v0.8.2-universal-official-signed.apk`** *(Universal semua HP Android)*
+            - **`Minecraft-Xyverse-v0.8.3-arm64-v8a-official-signed.apk`** *(Khusus HP 64-bit)*
+            - **`Minecraft-Xyverse-v0.8.3-armeabi-v7a-official-signed.apk`** *(Khusus HP 32-bit seperti Redmi A2)*
+            - **`Minecraft-Xyverse-v0.8.3-universal-official-signed.apk`** *(Universal semua HP Android)*
             - **`jre-arm64-v8a-openjdk.tar.xz`** & **`jre-armeabi-v7a-openjdk.tar.xz`** *(Arsip Real OpenJDK HotSpot Android)*
           files: |
-            dist-apks/Minecraft-Xyverse-v0.8.2-arm64-v8a-official-signed.apk
-            dist-apks/Minecraft-Xyverse-v0.8.2-armeabi-v7a-official-signed.apk
-            dist-apks/Minecraft-Xyverse-v0.8.2-universal-official-signed.apk
+            dist-apks/Minecraft-Xyverse-v0.8.3-arm64-v8a-official-signed.apk
+            dist-apks/Minecraft-Xyverse-v0.8.3-armeabi-v7a-official-signed.apk
+            dist-apks/Minecraft-Xyverse-v0.8.3-universal-official-signed.apk
             dist-apks/jre-arm64-v8a-openjdk.tar.xz
             dist-apks/jre-armeabi-v7a-openjdk.tar.xz
             dist-apks/xyverse-official-release.p12

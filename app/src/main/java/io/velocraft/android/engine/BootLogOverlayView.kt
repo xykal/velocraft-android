@@ -1152,11 +1152,10 @@ class BootLogOverlayView(
 
     private fun sanitizeLine(raw: String): String {
         return raw
-            .replace("libpojavexec.so", "libvelocraft_bridge.so", ignoreCase = true)
-            .replace("pojavexec", "velocraft_bridge", ignoreCase = true)
-            .replace("pojavInitOpenGL", "initOpenGLContext", ignoreCase = true)
-            .replace("pojavInit", "initBridge", ignoreCase = true)
-            .replace("Pojav", "VeloCraft", ignoreCase = true)
+            .replace("libvelocexec.so", "libvelocraft_bridge.so", ignoreCase = true)
+            .replace("velocexec", "velocraft_bridge", ignoreCase = true)
+            .replace("velocInitOpenGL", "initOpenGLContext", ignoreCase = true)
+            .replace("velocInit", "initBridge", ignoreCase = true)
     }
 
     private fun readLiveLogTail(maxLines: Int): List<String> {
@@ -1178,7 +1177,7 @@ class BootLogOverlayView(
 
     private fun copyBootLogToClipboard() {
         try {
-            val content = VeloLogger.readLatestLogsTail(65000)
+            val content = VeloLogger.readLatestLogsTail(65000).lines().joinToString("\n") { sanitizeLine(it) }
             val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             cm.setPrimaryClip(ClipData.newPlainText("Minecraft Boot Log", content))
             val dirPath = VeloLogger.logDir?.absolutePath ?: "Android/media/id.xyverse.minecraft/log"

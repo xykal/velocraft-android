@@ -291,8 +291,9 @@ object VeloVectorIcons {
                 canvas.drawLine(cx - r * 0.12f, cy + r * 0.12f, cx - r * 0.30f, cy - r * 0.06f, strokePaint)
             }
 
-            (action == ActionType.KEY_HOLD || action == ActionType.KEY_TOGGLE) && keyCodeOrButton == NativeEngineBridge.KEY_T -> {
-                // Tactical Speech Bubble with `>_` Command Prompt
+            (action == ActionType.KEY_HOLD || action == ActionType.KEY_TOGGLE) &&
+                (keyCodeOrButton == NativeEngineBridge.KEY_T || keyCodeOrButton == NativeEngineBridge.KEY_SLASH) -> {
+                // Tactical Speech Bubble with `>_` or `/` Command Prompt
                 rect.set(cx - r * 0.74f, cy - r * 0.62f, cx + r * 0.74f, cy + r * 0.36f)
                 fillPaint.color = softFillCol
                 canvas.drawRoundRect(rect, r * 0.22f, r * 0.22f, fillPaint)
@@ -305,9 +306,30 @@ object VeloVectorIcons {
 
                 strokePaint.color = subCol
                 strokePaint.strokeWidth = sw * 0.95f
-                canvas.drawLine(cx - r * 0.38f, cy - r * 0.30f, cx - r * 0.12f, cy - r * 0.12f, strokePaint)
-                canvas.drawLine(cx - r * 0.12f, cy - r * 0.12f, cx - r * 0.38f, cy + r * 0.06f, strokePaint)
-                canvas.drawLine(cx + r * 0.04f, cy + r * 0.08f, cx + r * 0.38f, cy + r * 0.08f, strokePaint)
+                if (keyCodeOrButton == NativeEngineBridge.KEY_SLASH) {
+                    canvas.drawLine(cx - r * 0.20f, cy + r * 0.14f, cx + r * 0.20f, cy - r * 0.36f, strokePaint)
+                } else {
+                    canvas.drawLine(cx - r * 0.38f, cy - r * 0.30f, cx - r * 0.12f, cy - r * 0.12f, strokePaint)
+                    canvas.drawLine(cx - r * 0.12f, cy - r * 0.12f, cx - r * 0.38f, cy + r * 0.06f, strokePaint)
+                    canvas.drawLine(cx + r * 0.04f, cy + r * 0.08f, cx + r * 0.38f, cy + r * 0.08f, strokePaint)
+                }
+            }
+
+            (action == ActionType.KEY_HOLD || action == ActionType.KEY_TOGGLE) && keyCodeOrButton == NativeEngineBridge.KEY_TAB -> {
+                // Scoreboard / Player Roster Grid Icon
+                rect.set(cx - r * 0.68f, cy - r * 0.62f, cx + r * 0.68f, cy + r * 0.62f)
+                fillPaint.color = softFillCol
+                canvas.drawRoundRect(rect, r * 0.16f, r * 0.16f, fillPaint)
+                strokePaint.color = mainCol
+                strokePaint.strokeWidth = sw
+                canvas.drawRoundRect(rect, r * 0.16f, r * 0.16f, strokePaint)
+
+                strokePaint.color = subCol
+                for (row in -1..1) {
+                    val ry = cy + row * r * 0.30f
+                    canvas.drawCircle(cx - r * 0.36f, ry, sw * 0.65f, strokePaint)
+                    canvas.drawLine(cx - r * 0.14f, ry, cx + r * 0.42f, ry, strokePaint)
+                }
             }
 
             (action == ActionType.KEY_HOLD || action == ActionType.KEY_TOGGLE) && keyCodeOrButton == NativeEngineBridge.KEY_F5 -> {

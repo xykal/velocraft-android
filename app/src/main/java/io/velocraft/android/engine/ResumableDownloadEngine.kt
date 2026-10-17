@@ -39,9 +39,9 @@ object ResumableDownloadEngine {
         "https://meta.fabricmc.net/v2/versions/loader/1.20.4/0.16.9/profile/json"
 
     private const val OPENJDK_ARM64_PRIMARY_URL =
-        "https://github.com/PojavLauncherTeam/android-openjdk-build-multiarch/releases/download/jre17-ec28559/jre17-arm64-20210825-release.tar.xz"
+        "https://github.com/xykal/velocraft-android/releases/download/runtime-openjdk17/velocraft-openjdk17-arm64-v8a.tar.xz"
     private const val OPENJDK_ARM32_PRIMARY_URL =
-        "https://github.com/PojavLauncherTeam/android-openjdk-build-multiarch/releases/download/jre17-ec28559/jre17-arm-20210914-release.tar.xz"
+        "https://github.com/xykal/velocraft-android/releases/download/runtime-openjdk17/velocraft-openjdk17-armeabi-v7a.tar.xz"
     private const val GITHUB_RELEASE_MIRROR_BASE =
         "https://github.com/xykal/velocraft-android/releases/download/v0.7.1-release"
 

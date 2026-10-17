@@ -739,8 +739,8 @@ class ProHudOverlayView @JvmOverloads constructor(
      * and Quick Action Pills (`[SIDEBAR]`, `[IME KEYB]`, `[JSON]`).
      */
     private fun drawMaximizedTopTelemetryBar(canvas: Canvas, w: Float) {
-        val barH = dp(30f)
-        val top = dp(5f)
+        val barH = dp(25f)
+        val top = dp(3.5f)
         val sideMargin = dp(8f)
         val totalW = (w - sideMargin * 2f).coerceAtMost(dp(840f))
         val startX = (w - totalW) * 0.5f
@@ -1365,26 +1365,53 @@ class ProHudOverlayView @JvmOverloads constructor(
     ): Float {
         var y = startY
 
-        // Search Bar (uses Android System IME Keyboard!)
-        val searchBoxW = width - dp(76f)
-        val searchRect = RectF(left, y, left + searchBoxW, y + dp(32f))
+        // 1. 4-Category Switcher Bar (MODS, SHADERS, TEKSTUR/RP, MAP & DUNIA)
+        val cats = ModrinthSyncManager.ContentCategory.values()
+        val catGap = dp(4f)
+        val catBtnW = (width - catGap * 3f) / 4f
+        val catBtnH = dp(28f)
+        val activeCat = ModrinthSyncManager.activeCategory
+        for ((idx, cat) in cats.withIndex()) {
+            val cl = left + idx * (catBtnW + catGap)
+            val cRect = RectF(cl, y, cl + catBtnW, y + catBtnH)
+            val isSel = (cat == activeCat)
+            bgFillPaint.color = if (isSel) 0xFF4E8C57.toInt() else 0xFF242320.toInt()
+            canvas.drawRoundRect(cRect, dp(6f), dp(6f), bgFillPaint)
+            strokePaint.color = if (isSel) 0xFF8CD996.toInt() else 0xFF3E3B35.toInt()
+            canvas.drawRoundRect(cRect, dp(6f), dp(6f), strokePaint)
+            textPaint.textSize = dp(7.6f)
+            textPaint.color = 0xFFF4F1EA.toInt()
+            canvas.drawText(cat.shortTab, cRect.centerX(), cRect.centerY() + dp(2.8f), textPaint)
+            registerSidebarHit(cRect, clipTop, clipBottom) {
+                ModrinthSyncManager.setCategory(context, cat) {
+                    sidebarScrollY = 0f
+                    postInvalidateOnAnimation()
+                }
+            }
+        }
+        y += catBtnH + dp(7f)
+
+        // 2. Search Bar (uses Android System IME Keyboard!) + [CARI] + [+ MUAT 30 LAGI]
+        val searchBoxW = width - dp(138f)
+        val searchRect = RectF(left, y, left + searchBoxW, y + dp(31f))
         bgFillPaint.color = 0xFF242320.toInt()
         canvas.drawRoundRect(searchRect, dp(7f), dp(7f), bgFillPaint)
         strokePaint.color = 0xFF4E8C57.toInt()
         canvas.drawRoundRect(searchRect, dp(7f), dp(7f), strokePaint)
 
         val qText = if (ModrinthSyncManager.currentSearchQuery.isBlank()) {
-            "Cari Mod 1.20.4 di Modrinth (Ketuk IME)..."
+            "Cari ${activeCat.shortTab} (Ketuk IME)..."
         } else {
             "Cari: ${ModrinthSyncManager.currentSearchQuery}"
         }
-        leftTextPaint.textSize = dp(9.0f)
+        leftTextPaint.textSize = dp(8.6f)
         leftTextPaint.color = if (ModrinthSyncManager.currentSearchQuery.isBlank()) 0xFF9C978C.toInt() else 0xFFF4F1EA.toInt()
-        canvas.drawText(qText, left + dp(8f), searchRect.centerY() + dp(3.1f), leftTextPaint)
+        val qClip = TextUtils.ellipsize(qText, leftTextPaint, searchBoxW - dp(14f), TextUtils.TruncateAt.END).toString()
+        canvas.drawText(qClip, left + dp(8f), searchRect.centerY() + dp(3.0f), leftTextPaint)
 
         registerSidebarHit(searchRect, clipTop, clipBottom) {
             SystemImeHelper.requestTextInput(
-                label = "Cari Mod Modrinth (1.20.4 Fabric)",
+                label = "Cari ${activeCat.fullTitle}",
                 initialText = ModrinthSyncManager.currentSearchQuery,
                 maxLength = 40,
                 onChanged = { q ->
@@ -1399,24 +1426,35 @@ class ProHudOverlayView @JvmOverloads constructor(
             )
         }
 
-        val searchBtnRect = RectF(searchRect.right + dp(6f), y, left + width, y + dp(32f))
+        val searchBtnRect = RectF(searchRect.right + dp(5f), y, searchRect.right + dp(56f), y + dp(31f))
         bgFillPaint.color = 0xFF4E8C57.toInt()
         canvas.drawRoundRect(searchBtnRect, dp(7f), dp(7f), bgFillPaint)
-        textPaint.textSize = dp(8.8f)
+        textPaint.textSize = dp(8.0f)
         textPaint.color = 0xFFF4F1EA.toInt()
-        canvas.drawText("CARI", searchBtnRect.centerX(), searchBtnRect.centerY() + dp(3.1f), textPaint)
+        canvas.drawText("CARI", searchBtnRect.centerX(), searchBtnRect.centerY() + dp(2.9f), textPaint)
         registerSidebarHit(searchBtnRect, clipTop, clipBottom) {
             ModrinthSyncManager.searchModsOnModrinth(context, ModrinthSyncManager.currentSearchQuery) {
                 postInvalidateOnAnimation()
             }
         }
-        y += dp(36f)
+
+        val loadMoreBtnRect = RectF(searchBtnRect.right + dp(5f), y, left + width, y + dp(31f))
+        bgFillPaint.color = 0xFF5A7D9A.toInt()
+        canvas.drawRoundRect(loadMoreBtnRect, dp(7f), dp(7f), bgFillPaint)
+        textPaint.textSize = dp(7.6f)
+        canvas.drawText("+MUAT SEMUA", loadMoreBtnRect.centerX(), loadMoreBtnRect.centerY() + dp(2.8f), textPaint)
+        registerSidebarHit(loadMoreBtnRect, clipTop, clipBottom) {
+            ModrinthSyncManager.loadMoreFromModrinth(context) {
+                postInvalidateOnAnimation()
+            }
+        }
+        y += dp(35f)
 
         // Status line
-        subTextPaint.textSize = dp(8.4f)
+        subTextPaint.textSize = dp(8.2f)
         val stLine = TextUtils.ellipsize(ModrinthSyncManager.syncStatusMessage, subTextPaint, width, TextUtils.TruncateAt.END).toString()
         canvas.drawText(stLine, left, y + dp(10f), subTextPaint)
-        y += dp(16f)
+        y += dp(15f)
 
         val mods = ModrinthSyncManager.getCatalogWithDiskState(context)
         for (mod in mods) {
@@ -1427,12 +1465,13 @@ class ProHudOverlayView @JvmOverloads constructor(
             strokePaint.color = if (mod.isInstalled && mod.isEnabled) 0xFF4E8C57.toInt() else 0xFF36342F.toInt()
             canvas.drawRoundRect(cardRect, dp(7f), dp(7f), strokePaint)
 
-            leftTextPaint.textSize = dp(9.5f)
+            leftTextPaint.textSize = dp(9.2f)
             leftTextPaint.color = 0xFFF4F1EA.toInt()
-            canvas.drawText("${mod.title}  [${mod.categoryTag}]", left + dp(8f), y + dp(16f), leftTextPaint)
+            val titleClip = TextUtils.ellipsize("${mod.title}  [${mod.categoryTag}]", leftTextPaint, width - dp(92f), TextUtils.TruncateAt.END).toString()
+            canvas.drawText(titleClip, left + dp(8f), y + dp(16f), leftTextPaint)
 
-            subTextPaint.textSize = dp(8.2f)
-            val descClip = TextUtils.ellipsize(mod.summary, subTextPaint, width - dp(92f), TextUtils.TruncateAt.END).toString()
+            subTextPaint.textSize = dp(8.0f)
+            val descClip = TextUtils.ellipsize("${mod.downloadsText} • ${mod.summary}", subTextPaint, width - dp(92f), TextUtils.TruncateAt.END).toString()
             canvas.drawText(descClip, left + dp(8f), y + dp(32f), subTextPaint)
 
             val actionRect = RectF(cardRect.right - dp(78f), y + dp(8f), cardRect.right - dp(6f), y + cardH - dp(8f))
@@ -1444,7 +1483,7 @@ class ProHudOverlayView @JvmOverloads constructor(
                 else -> 0xFF5A7D9A.toInt()
             }
             canvas.drawRoundRect(actionRect, dp(6f), dp(6f), bgFillPaint)
-            textPaint.textSize = dp(8.0f)
+            textPaint.textSize = dp(7.8f)
             val btnTxt = when {
                 isDownloading -> "UNDUH..."
                 mod.isInstalled && mod.isEnabled -> "AKTIF [ON]"
@@ -1460,6 +1499,22 @@ class ProHudOverlayView @JvmOverloads constructor(
             }
             y += cardH + dp(6f)
         }
+
+        // Bottom Button: Load More (+30 Items) from Modrinth Server
+        val moreFooterRect = RectF(left, y + dp(2f), left + width, y + dp(34f))
+        bgFillPaint.color = 0xFF28382B.toInt()
+        canvas.drawRoundRect(moreFooterRect, dp(7f), dp(7f), bgFillPaint)
+        strokePaint.color = 0xFF5FA869.toInt()
+        canvas.drawRoundRect(moreFooterRect, dp(7f), dp(7f), strokePaint)
+        textPaint.textSize = dp(8.5f)
+        textPaint.color = 0xFFF4F1EA.toInt()
+        canvas.drawText("+ MUAT LEBIH BANYAK ${activeCat.fullTitle} DARI SERVER (+30 ITEM)", moreFooterRect.centerX(), moreFooterRect.centerY() + dp(3.0f), textPaint)
+        registerSidebarHit(moreFooterRect, clipTop, clipBottom) {
+            ModrinthSyncManager.loadMoreFromModrinth(context) {
+                postInvalidateOnAnimation()
+            }
+        }
+        y += dp(40f)
 
         return y
     }

@@ -75,7 +75,7 @@ object VeloLogger {
 
             val header = buildString {
                 appendLine("========================================================================")
-                appendLine("MINECRAFT JAVA PORTING EDITION (v0.7.6-release) - DIAGNOSTIC LOG")
+                appendLine("MINECRAFT JAVA PORTING EDITION (v0.8.3-release) - DIAGNOSTIC LOG")
                 appendLine("========================================================================")
                 appendLine("Timestamp        : ${dateFormat.format(Date())}")
                 appendLine("Package Name     : ${context.packageName}")

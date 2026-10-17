@@ -26,7 +26,7 @@ class DirectBootProvisioner(private val context: Context) {
     val jreDir: File = File(rootEngineDir, "jre21-$activeAbi")
     val nativesDir: File = File(rootEngineDir, "natives-$activeAbi")
     private val readyMarkerFile: File = File(rootEngineDir, ".velocraft_ready_v6_$activeAbi")
-    private val lwjglMarkerFile: File = File(lwjglDir, ".lwjgl_v77_nocheck")
+    private val lwjglMarkerFile: File = File(lwjglDir, ".lwjgl_v083_veloc")
 
     fun isEngineProvisioned(): Boolean = readyMarkerFile.exists()
 
