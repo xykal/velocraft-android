@@ -112,7 +112,6 @@ class ProHudOverlayView @JvmOverloads constructor(
 
     // Slide-Out Left Sidebar Drawer State
     var isSidebarDrawerOpen: Boolean = false
-        private set
     private var activeSidebarSection: SidebarSection = SidebarSection.CONTROLS_HUD
     private var sidebarScrollY: Float = 0f
     private var sidebarMaxScrollY: Float = 0f
@@ -152,6 +151,15 @@ class ProHudOverlayView @JvmOverloads constructor(
         private set
     private var draggingButton: HudButtonConfig? = null
     private var selectedEditButton: HudButtonConfig? = null
+
+    fun exitVisualEditMode() {
+        isEditMode = false
+        draggingButton = null
+        selectedEditButton = null
+        ControlProfileManager.saveButtons(context, buttons)
+        onExitHudEditor?.invoke()
+        postInvalidateOnAnimation()
+    }
 
     // Editor 2-Row Studio Dock Hit Rects
     private val editAddKeyRect = RectF()
@@ -993,7 +1001,7 @@ class ProHudOverlayView @JvmOverloads constructor(
                 onGyroToggleRequested?.invoke(next)
                 postInvalidateOnAnimation()
             },
-            if (holdAutoClickEnabled) "AUTO-CLICK: ON (${macroEngine.targetLeftCps} CPS)" else "AUTO-CLICK: OFF",
+            if (holdAutoClickEnabled) "AUTO-CLICK: ON (14 CPS)" else "AUTO-CLICK: OFF",
             if (holdAutoClickEnabled) 0xFF4E8C57.toInt() else 0xFF282623.toInt(),
             {
                 holdAutoClickEnabled = !holdAutoClickEnabled

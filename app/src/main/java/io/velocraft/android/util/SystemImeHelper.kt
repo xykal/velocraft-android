@@ -212,7 +212,7 @@ object SystemImeHelper {
             edit.requestFocus()
             val imm = activity.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
             imm?.showSoftInput(edit, InputMethodManager.SHOW_FORCED)
-            VeloLogger.info("IME", "System IME Keyboard opened for field: $label")
+            VeloLogger.section("IME", "System IME Keyboard opened for field: $label")
         }
     }
 
@@ -247,7 +247,7 @@ object SystemImeHelper {
             edit.requestFocus()
             val imm = activity.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
             imm?.showSoftInput(edit, InputMethodManager.SHOW_FORCED)
-            VeloLogger.info("IME", "System IME Keyboard opened for direct Minecraft input.")
+            VeloLogger.section("IME", "System IME Keyboard opened for direct Minecraft input.")
         }
     }
 
@@ -264,6 +264,8 @@ object SystemImeHelper {
         }
     }
 
+    fun isImeActive(): Boolean = currentMode != Mode.NONE
+    fun hideKeyboard() = hideIme()
     fun isEditingUiField(): Boolean = currentMode == Mode.UI_FIELD
     fun getActiveFieldLabel(): String = activeFieldLabel
 }

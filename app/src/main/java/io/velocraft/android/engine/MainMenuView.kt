@@ -72,7 +72,7 @@ class MainMenuView @JvmOverloads constructor(
             if (value == NavPage.LOGS) {
                 logLines = sanitizeLogLines(VeloLogger.readLatestLogsTail(15000).lines())
                 logScrollY = 0f
-            } else if (value == NavPage.MODS_SHADERS && modrinthCatalog.isEmpty() && !ModrinthSyncManager.isLoading) {
+            } else if (value == NavPage.MODS_SHADERS && modrinthCatalog.isEmpty() && ModrinthSyncManager.activeDownloadSlug == null) {
                 triggerModrinthFetch(modrinthQuery)
             }
             postInvalidateOnAnimation()
@@ -262,8 +262,8 @@ class MainMenuView @JvmOverloads constructor(
     }
 
     private fun triggerModrinthFetch(query: String) {
-        ModrinthSyncManager.searchFabricModsAsync(context, query) { items, _ ->
-            modrinthCatalog = items
+        ModrinthSyncManager.searchModsOnModrinth(context, query) {
+            modrinthCatalog = ModrinthSyncManager.getCatalogWithDiskState(context)
             postInvalidateOnAnimation()
         }
     }
@@ -944,7 +944,7 @@ class MainMenuView @JvmOverloads constructor(
         canvas.drawText("SEGARKAN MODRINTH", modrinthSyncAllBtnRect.centerX(), modrinthSyncAllBtnRect.centerY() + dp(3.8f), btnTextPaint)
 
         val statusY = top + barH + dp(14f)
-        drawFittedText(canvas, ModrinthSyncManager.lastStatusMessage, left + dp(4f), statusY, totalW, mutedPaint)
+        drawFittedText(canvas, ModrinthSyncManager.syncStatusMessage, left + dp(4f), statusY, totalW, mutedPaint)
 
         val listTop = statusY + dp(8f)
         canvas.save()
@@ -978,7 +978,7 @@ class MainMenuView @JvmOverloads constructor(
                 val textW = totalW - btnW - dp(32f)
                 drawFittedText(
                     canvas,
-                    "${item.title} (${item.slug})  •  Oleh ${item.author}",
+                    "${item.title} [${item.categoryTag}]  •  ${item.downloadsText}",
                     r.left + dp(12f),
                     r.top + dp(20f),
                     textW,
@@ -986,7 +986,7 @@ class MainMenuView @JvmOverloads constructor(
                 )
                 drawFittedText(
                     canvas,
-                    item.description,
+                    item.summary,
                     r.left + dp(12f),
                     r.top + dp(37f),
                     textW,
@@ -1160,7 +1160,7 @@ class MainMenuView @JvmOverloads constructor(
         drawFittedText(canvas, AccountManager.msaAuthStatusText, rInL, ry, rInW, bodyPaint)
         ry += dp(10f)
 
-        val code = AccountManager.activeDeviceCode
+        val code = AccountManager.msaUserCode
         if (code.isNotBlank()) {
             val codeBox = RectF(rInL, ry, rInL + rInW, ry + dp(34f))
             canvas.drawRoundRect(codeBox, dp(7f), dp(7f), cardElevatedPaint)
@@ -1173,7 +1173,7 @@ class MainMenuView @JvmOverloads constructor(
         val startMsaRect = RectF(rInL, ry, rInL + rInW, ry + dp(36f))
         canvas.drawRoundRect(startMsaRect, dp(7f), dp(7f), accentGreenPaint)
         canvas.drawText(
-            if (AccountManager.isPollingMsa) "BUKA BROWSER MICROSOFT.COM/LINK" else "LOGIN AKUN MICROSOFT RESMI (OAUTH2)",
+            if (AccountManager.isMsaPolling) "BUKA BROWSER MICROSOFT.COM/LINK" else "LOGIN AKUN MICROSOFT RESMI (OAUTH2)",
             startMsaRect.centerX(),
             startMsaRect.centerY() + dp(3.8f),
             btnTextPaint
@@ -1181,10 +1181,10 @@ class MainMenuView @JvmOverloads constructor(
         accountActionRects.add("START_MSA_LOGIN" to startMsaRect)
         ry += dp(44f)
 
-        if (AccountManager.hasSavedMicrosoftAccount(context) || AccountManager.isPollingMsa) {
+        if (AccountManager.hasSavedMicrosoftAccount(context) || AccountManager.isMsaPolling) {
             val secRect = RectF(rInL, ry, rInL + rInW, ry + dp(32f))
             canvas.drawRoundRect(secRect, dp(7f), dp(7f), accentTerraPaint)
-            val secLabel = if (AccountManager.isPollingMsa) "BATALKAN PROSES LOGIN" else "KELUAR (LOGOUT) AKUN MICROSOFT"
+            val secLabel = if (AccountManager.isMsaPolling) "BATALKAN PROSES LOGIN" else "KELUAR (LOGOUT) AKUN MICROSOFT"
             canvas.drawText(secLabel, secRect.centerX(), secRect.centerY() + dp(3.8f), btnTextPaint)
             accountActionRects.add("MSA_SECONDARY" to secRect)
         }
@@ -1378,7 +1378,7 @@ class MainMenuView @JvmOverloads constructor(
         if (modsSubTabModrinthRect.contains(x, y)) {
             isModrinthOnlineTab = true
             pageScrollY = 0f
-            if (modrinthCatalog.isEmpty() && !ModrinthSyncManager.isLoading) {
+            if (modrinthCatalog.isEmpty() && ModrinthSyncManager.activeDownloadSlug == null) {
                 triggerModrinthFetch(modrinthQuery)
             }
             return
@@ -1424,7 +1424,7 @@ class MainMenuView @JvmOverloads constructor(
                             modrinthQuery = q
                             postInvalidateOnAnimation()
                         },
-                        onSubmitted = { q ->
+                        onCommitted = { q ->
                             modrinthQuery = q
                             triggerModrinthFetch(q)
                         }
@@ -1440,16 +1440,10 @@ class MainMenuView @JvmOverloads constructor(
                 else -> {
                     for ((item, r) in modrinthItemRects) {
                         if (r.contains(x, y)) {
-                            if (item.isInstalled) {
-                                val nowOn = ModrinthSyncManager.toggleInstalledMod(context, item.slug)
-                                triggerModrinthFetch(modrinthQuery)
-                                showBannerMessage("Mod '${item.title}' diatur ke: ${if (nowOn) "AKTIF" else "NONAKTIF"}")
-                            } else {
-                                showBannerMessage("Mengunduh '${item.title}' dari Modrinth API v2...")
-                                ModrinthSyncManager.installOrUpdateModAsync(context, item) { ok, msg ->
-                                    showBannerMessage(msg)
-                                    if (ok) triggerModrinthFetch(modrinthQuery)
-                                }
+                            ModrinthSyncManager.installOrToggleMod(context, item) {
+                                modrinthCatalog = ModrinthSyncManager.getCatalogWithDiskState(context)
+                                showBannerMessage(ModrinthSyncManager.syncStatusMessage)
+                                postInvalidateOnAnimation()
                             }
                             return
                         }
@@ -1465,7 +1459,7 @@ class MainMenuView @JvmOverloads constructor(
             ctrlKeybindModalBtnRect.contains(x, y) -> onOpenRendererAndKeybindModal?.invoke()
             ctrlSettingsModalBtnRect.contains(x, y) -> onOpenQuickSettings?.invoke()
             ctrlExportShareJsonRect.contains(x, y) -> {
-                val buttons = ControlProfileManager.loadOrCreateProfile(context).buttons
+                val buttons = ControlProfileManager.loadButtons(context)
                 val outPath = ControlProfileManager.exportAndShareLayoutJson(
                     context,
                     buttons,
@@ -1496,7 +1490,7 @@ class MainMenuView @JvmOverloads constructor(
                                 editingUsername = updated.replace(Regex("[^a-zA-Z0-9_]"), "")
                                 postInvalidateOnAnimation()
                             },
-                            onSubmitted = { submitted ->
+                            onCommitted = { submitted ->
                                 val clean = submitted.replace(Regex("[^a-zA-Z0-9_]"), "")
                                 val acc = AccountManager.setOfflineAccount(context, clean)
                                 sessionManager.saveOfflineSession(acc.username)
@@ -1513,7 +1507,7 @@ class MainMenuView @JvmOverloads constructor(
                     }
                     "START_MSA_LOGIN", "COPY_OPEN_MSA" -> {
                         AccountManager.setAccountMode(context, AccountManager.AccountType.MICROSOFT)
-                        if (AccountManager.isPollingMsa && AccountManager.activeVerificationUri.isNotBlank()) {
+                        if (AccountManager.isMsaPolling && AccountManager.msaVerificationUri.isNotBlank()) {
                             AccountManager.openVerificationBrowser(context)
                         } else {
                             AccountManager.startMicrosoftLoginFlow(context, openBrowserImmediately = true) {
@@ -1522,8 +1516,8 @@ class MainMenuView @JvmOverloads constructor(
                         }
                     }
                     "MSA_SECONDARY" -> {
-                        if (AccountManager.isPollingMsa) {
-                            AccountManager.cancelPolling()
+                        if (AccountManager.isMsaPolling) {
+                            AccountManager.cancelMsaPolling()
                         } else {
                             AccountManager.logoutMicrosoftAccount(context)
                             showBannerMessage("Akun Microsoft dikeluarkan. Beralih ke Akun Offline.")

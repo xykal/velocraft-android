@@ -241,16 +241,17 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
         // If JVM is already running in this process (e.g. Activity resumed/recreated after app switch),
         // immediately restore the in-game view without relogging!
         val nativeTelemetry = NativeEngineBridge.getBootTelemetry()
-        if (jvmRunningInProcess || (nativeTelemetry.stage >= 3 && !nativeTelemetry.jvmExited)) {
+        val nativeStage = nativeTelemetry?.stageIndex ?: 1
+        if (jvmRunningInProcess || nativeStage >= 3) {
             jvmRunningInProcess = true
             mainMenuView.visibility = View.GONE
             proHudOverlay.visibility = View.VISIBLE
-            if (nativeTelemetry.stage < 10) {
+            if (nativeStage < 10) {
                 bootLogOverlay.startBootMonitoring()
             } else {
                 bootLogOverlay.visibility = View.GONE
             }
-            VeloLogger.section("BOOT", "Resumed existing active JVM session without relog (stage=${nativeTelemetry.stage}).")
+            VeloLogger.section("BOOT", "Resumed existing active JVM session without relog (stage=$nativeStage).")
         }
 
         // Prevent Android Back Gesture / Button from finishing GameActivity while in-game
@@ -260,13 +261,13 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 override fun handleOnBackPressed() {
                     when {
                         SystemImeHelper.isImeActive() -> {
-                            SystemImeHelper.hideKeyboard(this@GameActivity)
+                            SystemImeHelper.hideKeyboard()
                         }
                         customModalView.visibility == View.VISIBLE -> {
                             customModalView.visibility = View.GONE
                         }
-                        proHudOverlay.isVisualEditMode -> {
-                            proHudOverlay.exitVisualEditMode(save = true)
+                        proHudOverlay.isEditMode -> {
+                            proHudOverlay.exitVisualEditMode()
                         }
                         proHudOverlay.isSidebarDrawerOpen -> {
                             proHudOverlay.isSidebarDrawerOpen = false
@@ -389,7 +390,7 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
             mainMenuView.visibility = View.GONE
             proHudOverlay.visibility = View.VISIBLE
             val nativeTel = NativeEngineBridge.getBootTelemetry()
-            if (nativeTel.stage < 10) {
+            if ((nativeTel?.stageIndex ?: 10) < 10) {
                 bootLogOverlay.startBootMonitoring()
             }
             return

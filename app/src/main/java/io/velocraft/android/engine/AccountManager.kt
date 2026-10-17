@@ -34,7 +34,10 @@ object AccountManager {
         val refreshToken: String,
         val type: AccountType,
         val lastLoginEpochMs: Long
-    )
+    ) {
+        val userType: String
+            get() = if (type == AccountType.MICROSOFT) "msa" else "legacy"
+    }
 
     private const val PREFS_NAME = "velocraft_account_prefs"
     private const val KEY_ACTIVE_TYPE = "active_type"
@@ -165,6 +168,18 @@ object AccountManager {
             .remove(KEY_MSA_REFRESH_TOKEN)
             .putString(KEY_ACTIVE_TYPE, AccountType.OFFLINE.id)
             .apply()
+    }
+
+    fun cancelMsaPolling() {
+        isMsaPolling = false
+        msaUserCode = ""
+        msaAuthStatusText = "Proses login Microsoft dibatalkan."
+    }
+
+    fun openVerificationBrowser(context: Context) {
+        if (msaVerificationUri.isNotBlank()) {
+            openVerificationUrlInBrowser(context, msaVerificationUri, msaUserCode)
+        }
     }
 
     fun getSavedAccountHistory(context: Context): List<PlayerAccount> {
