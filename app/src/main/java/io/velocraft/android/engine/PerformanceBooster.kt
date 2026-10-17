@@ -184,6 +184,21 @@ object PerformanceBooster {
         NativeEngineBridge.setResolutionScale(clamped / 100f)
     }
 
+    fun getResolutionScale(context: Context): Float {
+        return (getLiveResolutionScalePct(context) / 100f).coerceIn(0.50f, 1.00f)
+    }
+
+    fun setResolutionScale(context: Context, scale: Float) {
+        val clamped = scale.coerceIn(0.50f, 1.00f)
+        val pct = (clamped * 100f).roundToInt().coerceIn(50, 100)
+        setLiveResolutionScalePct(context, pct)
+    }
+
+    fun applySavedResolutionScaleToEngine(context: Context) {
+        val scale = getResolutionScale(context)
+        NativeEngineBridge.setResolutionScale(scale)
+    }
+
     fun setRenderDistanceChunks(context: Context, chunks: Int) {
         val clamped = chunks.coerceIn(2, 12)
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)

@@ -388,6 +388,25 @@ class BootLogOverlayView(
         removeCallbacks(refreshTick)
     }
 
+    fun updateBootStage(title: String, progress: Int, summary: String? = null) {
+        post {
+            currentStageTitle = sanitizeLine(title)
+            bootPercent = max(bootPercent, progress.coerceIn(0, 100))
+            if (!summary.isNullOrBlank()) {
+                currentSubTaskDetail = sanitizeLine(summary)
+            }
+            if (visibility == VISIBLE) {
+                invalidate()
+            }
+        }
+    }
+
+    fun notifyJvmFinished(exitCode: Int) {
+        post {
+            notifyJvmExited(exitCode)
+        }
+    }
+
     fun notifyJvmExited(exitCode: Int) {
         isJvmExited = true
         jvmExitCode = exitCode
