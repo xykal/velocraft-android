@@ -62,6 +62,15 @@ object ControlProfileManager {
     private const val PROFILE_FILENAME = "velocraft_hud_pro_v6.json"
     private const val CURRENT_SCHEMA_VERSION = 6
 
+    val STUDIO_ACCENT_PALETTE: List<Pair<String, Int>> = listOf(
+        "Hijau Zamrud (Emerald)" to 0xFF4E8C57.toInt(),
+        "Tembaga Hangat (Terracotta)" to 0xFFC87D55.toInt(),
+        "Emas Kuningan (Amber)" to 0xFFB89248.toInt(),
+        "Biru Baja (Slate Blue)" to 0xFF5A7D9A.toInt(),
+        "Merah Koral (Crimson)" to 0xFFB85448.toInt(),
+        "Abu Grafit (Graphite)" to 0xFF78736A.toInt()
+    )
+
     @Volatile
     var lastShareStatusMessage: String =
         "Format berbagi kontrol: .json standar (Simpan di Android/media/id.xyverse.minecraft/controls/)"
@@ -609,6 +618,40 @@ object ControlProfileManager {
         }
     }
 
+    fun createCompetitivePvpLayout(): MutableList<HudButtonConfig> {
+        val base = createDefaultProPvpLayout()
+        base.find { it.id == "btn_attack" }?.apply {
+            normX = 0.78f
+            normY = 0.30f
+            radiusDp = 25f
+        }
+        base.find { it.id == "btn_jump" }?.apply {
+            normX = 0.91f
+            normY = 0.30f
+            radiusDp = 24f
+        }
+        base.find { it.id == "btn_place" }?.apply {
+            normX = 0.85f
+            normY = 0.74f
+            radiusDp = 24f
+        }
+        base.find { it.id == "btn_combo" }?.apply {
+            normX = 0.74f
+            normY = 0.74f
+            radiusDp = 20f
+        }
+        return base
+    }
+
+    fun createBuilderMinimalLayout(): MutableList<HudButtonConfig> {
+        val base = createDefaultProPvpLayout()
+        base.forEach { btn ->
+            btn.radiusDp = (btn.radiusDp * 0.90f).coerceAtLeast(15f)
+            btn.opacity = (btn.opacity * 0.85f).coerceIn(0.15f, 1.0f)
+        }
+        return base
+    }
+
     /**
      * Applies one of 3 built-in ergonomic presets:
      * 0 = Standard Pro (Balanced 2-Thumb 3x3 D-Pad + Right Arc)
@@ -616,38 +659,10 @@ object ControlProfileManager {
      * 2 = Compact Builder / Survival (Slightly smaller buttons for maximum field of view)
      */
     fun applyPreset(context: Context, presetIndex: Int): MutableList<HudButtonConfig> {
-        val base = createDefaultProPvpLayout()
-        when (presetIndex) {
-            1 -> {
-                // 4-Finger Claw PvP: Move Attack & Combo to top-left/top-right index finger zones
-                base.find { it.id == "btn_attack" }?.apply {
-                    normX = 0.78f
-                    normY = 0.30f
-                    radiusDp = 26f
-                }
-                base.find { it.id == "btn_jump" }?.apply {
-                    normX = 0.91f
-                    normY = 0.30f
-                    radiusDp = 25f
-                }
-                base.find { it.id == "btn_place" }?.apply {
-                    normX = 0.85f
-                    normY = 0.74f
-                    radiusDp = 25f
-                }
-                base.find { it.id == "btn_combo" }?.apply {
-                    normX = 0.74f
-                    normY = 0.74f
-                    radiusDp = 21f
-                }
-            }
-            2 -> {
-                // Compact Builder / Survival: Clean, low-profile buttons
-                base.forEach { btn ->
-                    btn.radiusDp = (btn.radiusDp * 0.90f).coerceAtLeast(15f)
-                    btn.opacity = (btn.opacity * 0.85f).coerceIn(0.15f, 1.0f)
-                }
-            }
+        val base = when (presetIndex) {
+            1 -> createCompetitivePvpLayout()
+            2 -> createBuilderMinimalLayout()
+            else -> createDefaultProPvpLayout()
         }
         saveLayout(context, base)
         return base

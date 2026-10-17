@@ -204,6 +204,19 @@ object RendererProfileManager {
         return available.firstOrNull() ?: "(Belum ada file .zip di folder shaderpacks)"
     }
 
+    fun getSelectedShaderpack(context: Context): String = getActiveShaderpackName(context)
+
+    fun setSelectedShaderpack(context: Context, packName: String) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_ACTIVE_SHADERPACK, packName)
+            .apply()
+    }
+
+    fun setShadersEnabled(context: Context, enabled: Boolean) {
+        setShaderSupportEnabled(context, enabled)
+    }
+
     fun cycleActiveShaderpack(context: Context): String {
         val available = getExternalShaderpackNames()
         if (available.isEmpty()) return "(Belum ada file .zip di folder shaderpacks)"
