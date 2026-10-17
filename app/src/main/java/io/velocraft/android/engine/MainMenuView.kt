@@ -116,6 +116,7 @@ class MainMenuView @JvmOverloads constructor(
     private val homePrimaryActionRect = RectF()
     private val homeQuickAccountRect = RectF()
     private val homeQuickRamRect = RectF()
+    private val homeQuickBoostRect = RectF()
 
     // Page 2 (MEMORY & ENGINE) Hit Rects
     private val ramSliderRect = RectF()
@@ -129,6 +130,9 @@ class MainMenuView @JvmOverloads constructor(
     private val res100Rect = RectF()
     private val gcG1Rect = RectF()
     private val gcZgcRect = RectF()
+    private val boostTurboRect = RectF()
+    private val boostPvpRect = RectF()
+    private val boostCleanRamRect = RectF()
 
     // Page 3 (MODS, SHADERS & MODRINTH) Hit Rects
     private val modsSubTabLocalRect = RectF()
@@ -434,7 +438,7 @@ class MainMenuView @JvmOverloads constructor(
         // Subtle version footer at bottom of sidebar
         drawFittedText(
             canvas,
-            "v0.7.8-release | ${if (android.os.Process.is64Bit()) "ARM64" else "ARM32"}",
+            "v0.7.9-release | ${if (android.os.Process.is64Bit()) "ARM64" else "ARM32"}",
             sbPad,
             h - dp(11f),
             sidebarW - sbPad * 2f,
@@ -525,32 +529,44 @@ class MainMenuView @JvmOverloads constructor(
 
         val pillY = top + heroH - dp(36f)
         val pillH = dp(26f)
-        val pillW = ((maxHeroTextW - dp(10f)) * 0.5f).coerceAtMost(dp(235f))
+        val pillW = ((maxHeroTextW - dp(16f)) / 3f).coerceAtMost(dp(195f))
 
         homeQuickAccountRect.set(heroTextLeft, pillY, heroTextLeft + pillW, pillY + pillH)
         canvas.drawRoundRect(homeQuickAccountRect, dp(6f), dp(6f), cardElevatedPaint)
         canvas.drawRoundRect(homeQuickAccountRect, dp(6f), dp(6f), borderPaint)
-        drawNavVectorIcon(canvas, 4, homeQuickAccountRect.left + dp(12f), homeQuickAccountRect.centerY(), dp(5.5f), 0xFFF4F1EA.toInt())
+        drawNavVectorIcon(canvas, 4, homeQuickAccountRect.left + dp(11f), homeQuickAccountRect.centerY(), dp(5.2f), 0xFFF4F1EA.toInt())
         drawFittedText(
             canvas,
-            "${activeAcc.username} (${if (activeAcc.type == AccountManager.AccountType.MICROSOFT) "MSA" else "Offline"}) [Ubah]",
-            homeQuickAccountRect.left + dp(23f),
+            "${activeAcc.username} [Akun]",
+            homeQuickAccountRect.left + dp(21f),
             homeQuickAccountRect.centerY() + dp(3.8f),
-            pillW - dp(30f),
+            pillW - dp(26f),
             bodyBoldPaint
         )
 
         homeQuickRamRect.set(homeQuickAccountRect.right + dp(8f), pillY, homeQuickAccountRect.right + dp(8f) + pillW, pillY + pillH)
         canvas.drawRoundRect(homeQuickRamRect, dp(6f), dp(6f), cardElevatedPaint)
         canvas.drawRoundRect(homeQuickRamRect, dp(6f), dp(6f), borderPaint)
-        drawNavVectorIcon(canvas, 1, homeQuickRamRect.left + dp(12f), homeQuickRamRect.centerY(), dp(5.5f), 0xFFF4F1EA.toInt())
-        val ramTag = if (hw.isCustomHeap) "Custom" else "Saran"
+        drawNavVectorIcon(canvas, 1, homeQuickRamRect.left + dp(11f), homeQuickRamRect.centerY(), dp(5.2f), 0xFFF4F1EA.toInt())
         drawFittedText(
             canvas,
-            "RAM: ${hw.allocatedHeapMb} MB ($ramTag) [Atur]",
-            homeQuickRamRect.left + dp(23f),
+            "RAM: ${hw.allocatedHeapMb} MB [Atur]",
+            homeQuickRamRect.left + dp(21f),
             homeQuickRamRect.centerY() + dp(3.8f),
-            pillW - dp(30f),
+            pillW - dp(26f),
+            bodyBoldPaint
+        )
+
+        val activeBoost = PerformanceBooster.getActiveProfile(context)
+        homeQuickBoostRect.set(homeQuickRamRect.right + dp(8f), pillY, homeQuickRamRect.right + dp(8f) + pillW, pillY + pillH)
+        canvas.drawRoundRect(homeQuickBoostRect, dp(6f), dp(6f), accentTerraPaint)
+        canvas.drawRoundRect(homeQuickBoostRect, dp(6f), dp(6f), activeBorderPaint)
+        drawFittedText(
+            canvas,
+            "BOOST: ${activeBoost.shortTag} [KLIK BOOST]",
+            homeQuickBoostRect.left + dp(10f),
+            homeQuickBoostRect.centerY() + dp(3.8f),
+            pillW - dp(20f),
             bodyBoldPaint
         )
 
@@ -759,20 +775,40 @@ class MainMenuView @JvmOverloads constructor(
             canvas.drawText(pair.second, r.centerX(), r.centerY() + dp(3.8f), btnTextPaint)
         }
 
-        y += dp(46f)
-        drawFittedText(canvas, "Mode JVM Garbage Collector:", inL, y, inW, h2Paint)
-        y += dp(8f)
+        y += dp(40f)
+        drawFittedText(canvas, "Mode JVM Garbage Collector & Preset FPS Boost:", inL, y, inW, h2Paint)
+        y += dp(7f)
         val gcW = (inW - dp(8f)) * 0.5f
-        gcG1Rect.set(inL, y, inL + gcW, y + resH)
-        gcZgcRect.set(gcG1Rect.right + dp(8f), y, inL + inW, y + resH)
+        gcG1Rect.set(inL, y, inL + gcW, y + dp(27f))
+        gcZgcRect.set(gcG1Rect.right + dp(8f), y, inL + inW, y + dp(27f))
 
         canvas.drawRoundRect(gcG1Rect, dp(6f), dp(6f), if (!hw.useGenerationalZgc) accentGreenPaint else cardElevatedPaint)
         canvas.drawRoundRect(gcG1Rect, dp(6f), dp(6f), borderPaint)
-        canvas.drawText("G1GC (Stabil Semua HP)", gcG1Rect.centerX(), gcG1Rect.centerY() + dp(3.8f), btnTextPaint)
+        canvas.drawText("G1GC (Stabil Semua HP)", gcG1Rect.centerX(), gcG1Rect.centerY() + dp(3.6f), btnTextPaint)
 
         canvas.drawRoundRect(gcZgcRect, dp(6f), dp(6f), if (hw.useGenerationalZgc) accentGreenPaint else cardElevatedPaint)
         canvas.drawRoundRect(gcZgcRect, dp(6f), dp(6f), borderPaint)
-        canvas.drawText("Generational ZGC (64-bit)", gcZgcRect.centerX(), gcZgcRect.centerY() + dp(3.8f), btnTextPaint)
+        canvas.drawText("Generational ZGC (64-bit)", gcZgcRect.centerX(), gcZgcRect.centerY() + dp(3.6f), btnTextPaint)
+
+        y += dp(33f)
+        val bW = (inW - dp(12f)) / 3f
+        val bH = dp(28f)
+        val curBoost = PerformanceBooster.getActiveProfile(context)
+        boostTurboRect.set(inL, y, inL + bW, y + bH)
+        boostPvpRect.set(boostTurboRect.right + dp(6f), y, boostTurboRect.right + dp(6f) + bW, y + bH)
+        boostCleanRamRect.set(boostPvpRect.right + dp(6f), y, inL + inW, y + bH)
+
+        canvas.drawRoundRect(boostTurboRect, dp(6f), dp(6f), if (curBoost == PerformanceBooster.BoostProfile.TURBO_FPS) accentGreenPaint else cardElevatedPaint)
+        canvas.drawRoundRect(boostTurboRect, dp(6f), dp(6f), borderPaint)
+        canvas.drawText("TURBO (4 CHUNK)", boostTurboRect.centerX(), boostTurboRect.centerY() + dp(3.6f), btnTextPaint)
+
+        canvas.drawRoundRect(boostPvpRect, dp(6f), dp(6f), if (curBoost == PerformanceBooster.BoostProfile.PVP_COMPETITIVE) accentGreenPaint else cardElevatedPaint)
+        canvas.drawRoundRect(boostPvpRect, dp(6f), dp(6f), borderPaint)
+        canvas.drawText("PVP (6 CHUNK)", boostPvpRect.centerX(), boostPvpRect.centerY() + dp(3.6f), btnTextPaint)
+
+        canvas.drawRoundRect(boostCleanRamRect, dp(6f), dp(6f), accentTerraPaint)
+        canvas.drawRoundRect(boostCleanRamRect, dp(6f), dp(6f), borderPaint)
+        canvas.drawText("BOOST RAM SEKARANG", boostCleanRamRect.centerX(), boostCleanRamRect.centerY() + dp(3.6f), btnTextPaint)
 
         // RIGHT COLUMN CARD: Multi-Renderer Selector
         tmpRect.set(rightColLeft, top, right, bottom)
@@ -1308,6 +1344,10 @@ class MainMenuView @JvmOverloads constructor(
         when {
             homeQuickAccountRect.contains(x, y) -> activePage = NavPage.ACCOUNT
             homeQuickRamRect.contains(x, y) -> activePage = NavPage.MEMORY_ENGINE
+            homeQuickBoostRect.contains(x, y) -> {
+                val res = PerformanceBooster.runInstantBoost(context)
+                showBannerMessage(res.summaryMessage)
+            }
             homeLiteModeRect.contains(x, y) -> {
                 if (!downloadState.isRunning) {
                     skipMusicLite = true
@@ -1350,6 +1390,18 @@ class MainMenuView @JvmOverloads constructor(
             res100Rect.contains(x, y) -> JvmOptimizer.setResolutionScalePct(context, 100)
             gcG1Rect.contains(x, y) -> JvmOptimizer.setZgcModeEnabled(context, false)
             gcZgcRect.contains(x, y) -> JvmOptimizer.setZgcModeEnabled(context, true)
+            boostTurboRect.contains(x, y) -> {
+                val msg = PerformanceBooster.applyBoostProfile(context, PerformanceBooster.BoostProfile.TURBO_FPS)
+                showBannerMessage(msg)
+            }
+            boostPvpRect.contains(x, y) -> {
+                val msg = PerformanceBooster.applyBoostProfile(context, PerformanceBooster.BoostProfile.PVP_COMPETITIVE)
+                showBannerMessage(msg)
+            }
+            boostCleanRamRect.contains(x, y) -> {
+                val res = PerformanceBooster.runInstantBoost(context)
+                showBannerMessage(res.summaryMessage)
+            }
             else -> {
                 for ((mb, r) in ramPresetRects) {
                     if (r.contains(x, y)) {

@@ -19,6 +19,7 @@ import android.view.View
 import io.velocraft.android.bridge.NativeEngineBridge
 import io.velocraft.android.engine.AccountManager
 import io.velocraft.android.engine.ModrinthSyncManager
+import io.velocraft.android.engine.PerformanceBooster
 import io.velocraft.android.util.SystemImeHelper
 import io.velocraft.android.util.VeloLogger
 import kotlin.math.abs
@@ -44,7 +45,7 @@ class ProHudOverlayView @JvmOverloads constructor(
         SHARE_JSON("JSON", "BAGIKAN, EKSPOR & IMPOR KONTROL (.JSON)"),
         MODRINTH_SYNC("MODRINTH", "SINKRONISASI & UNDUH MODS MODRINTH"),
         IME_SHORTCUTS("KEYBOARD", "KEYBOARD IME SISTEM & PINTASAN CEPAT"),
-        TELEMETRY_LOG("SISTEM", "TELEMETRI MESIN & LOG DIAGNOSTIK")
+        TELEMETRY_LOG("BOOST", "BOOST FPS, RAM & KONSOL LOG BOOT")
     }
 
     private data class SidebarActionHit(
@@ -126,9 +127,21 @@ class ProHudOverlayView @JvmOverloads constructor(
 
     // Maximized Top Telemetry Bar Hit Rects
     private val topBarSidebarBtnRect = RectF()
+    private val topBarLogBtnRect = RectF()
+    private val topBarBoostBtnRect = RectF()
     private val topBarImeBtnRect = RectF()
     private val topBarJsonBtnRect = RectF()
     private val topBarMainRect = RectF()
+
+    // In-HUD Boost & Status Toast Banner
+    private var hudStatusToastMessage: String? = null
+    private var hudStatusToastExpireMs: Long = 0L
+
+    fun showHudToast(message: String, durationMs: Long = 3500L) {
+        hudStatusToastMessage = message
+        hudStatusToastExpireMs = System.currentTimeMillis() + durationMs
+        postInvalidateOnAnimation()
+    }
 
     // Virtual Mouse Cursor State
     var isVirtualCursorEnabled: Boolean = false
@@ -608,11 +621,13 @@ class ProHudOverlayView @JvmOverloads constructor(
         val totalW = (w - sideMargin * 2f).coerceAtMost(dp(840f))
         val startX = (w - totalW) * 0.5f
 
-        val sidebarBtnW = dp(86f)
-        val rightBtnW = dp(66f)
-        val gap = dp(5f)
+        val sidebarBtnW = dp(76f)
+        val logBtnW = dp(54f)
+        val boostBtnW = dp(60f)
+        val rightBtnW = dp(62f)
+        val gap = dp(4.5f)
 
-        // 1. Left Quick-Trigger Pill: Slide-Out Sidebar Button with Vector Hamburger/Sliders Icon
+        // 1A. Left Quick-Trigger Pill: Slide-Out Sidebar Button with Vector Hamburger/Sliders Icon
         topBarSidebarBtnRect.set(startX, top, startX + sidebarBtnW, top + barH)
         bgFillPaint.color = if (isSidebarDrawerOpen) 0xFF4E8C57.toInt() else 0xEB1A1917.toInt()
         canvas.drawRoundRect(topBarSidebarBtnRect, dp(7f), dp(7f), bgFillPaint)
@@ -620,46 +635,67 @@ class ProHudOverlayView @JvmOverloads constructor(
         strokePaint.strokeWidth = dp(1.3f)
         canvas.drawRoundRect(topBarSidebarBtnRect, dp(7f), dp(7f), strokePaint)
 
-        // Draw Sidebar Vector Icon (3 horizontal bars + nodes)
-        val iconCx = topBarSidebarBtnRect.left + dp(14f)
+        val iconCx = topBarSidebarBtnRect.left + dp(12f)
         val iconCy = topBarSidebarBtnRect.centerY()
         iconPaint.color = 0xFFF4F1EA.toInt()
-        iconPaint.strokeWidth = dp(1.6f)
-        canvas.drawLine(iconCx - dp(6f), iconCy - dp(4.5f), iconCx + dp(6f), iconCy - dp(4.5f), iconPaint)
-        canvas.drawLine(iconCx - dp(6f), iconCy, iconCx + dp(6f), iconCy, iconPaint)
-        canvas.drawLine(iconCx - dp(6f), iconCy + dp(4.5f), iconCx + dp(6f), iconCy + dp(4.5f), iconPaint)
+        iconPaint.strokeWidth = dp(1.5f)
+        canvas.drawLine(iconCx - dp(5f), iconCy - dp(4f), iconCx + dp(5f), iconCy - dp(4f), iconPaint)
+        canvas.drawLine(iconCx - dp(5f), iconCy, iconCx + dp(5f), iconCy, iconPaint)
+        canvas.drawLine(iconCx - dp(5f), iconCy + dp(4f), iconCx + dp(5f), iconCy + dp(4f), iconPaint)
 
-        textPaint.textSize = dp(8.8f)
+        textPaint.textSize = dp(8.2f)
         textPaint.color = 0xFFF4F1EA.toInt()
         canvas.drawText(
             "SIDEBAR",
-            topBarSidebarBtnRect.left + dp(52f),
-            topBarSidebarBtnRect.centerY() + dp(3.1f),
+            topBarSidebarBtnRect.left + dp(46f),
+            topBarSidebarBtnRect.centerY() + dp(3.0f),
             textPaint
         )
 
-        // 2. Right Quick-Action Pills: [JSON] & [IME KEYB]
+        // 1B. Left-2 Quick-Trigger Pill: [LOG] Button to Reopen Boot Log & Hadits Overlay Anytime!
+        topBarLogBtnRect.set(topBarSidebarBtnRect.right + gap, top, topBarSidebarBtnRect.right + gap + logBtnW, top + barH)
+        bgFillPaint.color = 0xEB1D2B22.toInt()
+        canvas.drawRoundRect(topBarLogBtnRect, dp(7f), dp(7f), bgFillPaint)
+        strokePaint.color = 0xFF5FA869.toInt()
+        canvas.drawRoundRect(topBarLogBtnRect, dp(7f), dp(7f), strokePaint)
+        drawVectorIcon(canvas, 4, topBarLogBtnRect.left + dp(11f), topBarLogBtnRect.centerY(), dp(4.8f), 0xFFF4F1EA.toInt())
+        canvas.drawText(
+            "LOG",
+            topBarLogBtnRect.left + dp(34f),
+            topBarLogBtnRect.centerY() + dp(3.0f),
+            textPaint
+        )
+
+        // 2. Right Quick-Action Pills: [BOOST], [JSON] & [IME KEY]
         val endX = startX + totalW
         topBarImeBtnRect.set(endX - rightBtnW, top, endX, top + barH)
         bgFillPaint.color = 0xEB222D38.toInt()
         canvas.drawRoundRect(topBarImeBtnRect, dp(7f), dp(7f), bgFillPaint)
         strokePaint.color = 0xFF5A7D9A.toInt()
         canvas.drawRoundRect(topBarImeBtnRect, dp(7f), dp(7f), strokePaint)
-        drawVectorIcon(canvas, 3, topBarImeBtnRect.left + dp(13f), topBarImeBtnRect.centerY(), dp(5.5f), 0xFFF4F1EA.toInt())
-        textPaint.textSize = dp(8.4f)
-        canvas.drawText("IME KEY", topBarImeBtnRect.left + dp(42f), topBarImeBtnRect.centerY() + dp(3.0f), textPaint)
+        drawVectorIcon(canvas, 3, topBarImeBtnRect.left + dp(11f), topBarImeBtnRect.centerY(), dp(5.0f), 0xFFF4F1EA.toInt())
+        textPaint.textSize = dp(8.0f)
+        canvas.drawText("IME KEY", topBarImeBtnRect.left + dp(39f), topBarImeBtnRect.centerY() + dp(2.9f), textPaint)
 
-        topBarJsonBtnRect.set(topBarImeBtnRect.left - gap - dp(58f), top, topBarImeBtnRect.left - gap, top + barH)
+        topBarJsonBtnRect.set(topBarImeBtnRect.left - gap - dp(52f), top, topBarImeBtnRect.left - gap, top + barH)
         bgFillPaint.color = 0xEB26211C.toInt()
         canvas.drawRoundRect(topBarJsonBtnRect, dp(7f), dp(7f), bgFillPaint)
         strokePaint.color = 0xFFC87D55.toInt()
         canvas.drawRoundRect(topBarJsonBtnRect, dp(7f), dp(7f), strokePaint)
-        drawVectorIcon(canvas, 1, topBarJsonBtnRect.left + dp(12f), topBarJsonBtnRect.centerY(), dp(5.2f), 0xFFF4F1EA.toInt())
-        canvas.drawText("JSON", topBarJsonBtnRect.left + dp(38f), topBarJsonBtnRect.centerY() + dp(3.0f), textPaint)
+        drawVectorIcon(canvas, 1, topBarJsonBtnRect.left + dp(11f), topBarJsonBtnRect.centerY(), dp(4.8f), 0xFFF4F1EA.toInt())
+        canvas.drawText("JSON", topBarJsonBtnRect.left + dp(34f), topBarJsonBtnRect.centerY() + dp(2.9f), textPaint)
+
+        topBarBoostBtnRect.set(topBarJsonBtnRect.left - gap - boostBtnW, top, topBarJsonBtnRect.left - gap, top + barH)
+        bgFillPaint.color = 0xEB2B2118.toInt()
+        canvas.drawRoundRect(topBarBoostBtnRect, dp(7f), dp(7f), bgFillPaint)
+        strokePaint.color = 0xFFE6B86A.toInt()
+        canvas.drawRoundRect(topBarBoostBtnRect, dp(7f), dp(7f), strokePaint)
+        drawVectorIcon(canvas, 4, topBarBoostBtnRect.left + dp(11f), topBarBoostBtnRect.centerY(), dp(4.8f), 0xFFE6B86A.toInt())
+        canvas.drawText("BOOST", topBarBoostBtnRect.left + dp(38f), topBarBoostBtnRect.centerY() + dp(2.9f), textPaint)
 
         // 3. Center Maximized Telemetry Strip
-        val mainLeft = topBarSidebarBtnRect.right + gap
-        val mainRight = topBarJsonBtnRect.left - gap
+        val mainLeft = topBarLogBtnRect.right + gap
+        val mainRight = topBarBoostBtnRect.left - gap
         topBarMainRect.set(mainLeft, top, mainRight, top + barH)
         canvas.drawRoundRect(topBarMainRect, dp(7f), dp(7f), hudBannerPaint)
         strokePaint.color = 0x8858544C.toInt()
@@ -709,6 +745,23 @@ class ProHudOverlayView @JvmOverloads constructor(
             topBarMainRect.centerY() + dp(3.2f),
             textPaint
         )
+
+        // 4. Optional In-HUD Boost / Action Toast Banner directly below the Top Telemetry Bar
+        val toastMsg = hudStatusToastMessage
+        if (toastMsg != null && System.currentTimeMillis() < hudStatusToastExpireMs) {
+            val toastW = (w * 0.72f).coerceAtMost(dp(560f))
+            val toastLeft = (w - toastW) * 0.5f
+            val toastTop = top + barH + dp(5f)
+            val toastRect = RectF(toastLeft, toastTop, toastLeft + toastW, toastTop + dp(25f))
+            bgFillPaint.color = 0xF0254D2B.toInt()
+            canvas.drawRoundRect(toastRect, dp(6f), dp(6f), bgFillPaint)
+            strokePaint.color = 0xFF8CD996.toInt()
+            canvas.drawRoundRect(toastRect, dp(6f), dp(6f), strokePaint)
+            textPaint.textSize = dp(8.8f)
+            textPaint.color = 0xFFF4F1EA.toInt()
+            val clippedToast = TextUtils.ellipsize(toastMsg, textPaint, toastW - dp(20f), TextUtils.TruncateAt.END).toString()
+            canvas.drawText(clippedToast, toastRect.centerX(), toastRect.centerY() + dp(3.1f), textPaint)
+        }
     }
 
     /**
@@ -1378,31 +1431,135 @@ class ProHudOverlayView @JvmOverloads constructor(
         var y = startY
         val halfW = (width - dp(8f)) * 0.5f
 
-        val infoCardH = dp(86f)
+        // 1. Prominent Button to Reopen Boot Log & Hadits Overlay Anytime!
+        val openLogBtnRect = RectF(left, y, left + width, y + dp(36f))
+        bgFillPaint.color = 0xFF4E8C57.toInt()
+        canvas.drawRoundRect(openLogBtnRect, dp(7f), dp(7f), bgFillPaint)
+        strokePaint.color = 0xFF8CD996.toInt()
+        canvas.drawRoundRect(openLogBtnRect, dp(7f), dp(7f), strokePaint)
+        textPaint.textSize = dp(9.2f)
+        textPaint.color = 0xFFF4F1EA.toInt()
+        canvas.drawText("BUKA KONSOL LOG BOOT, ANIMASI & HADITS", openLogBtnRect.centerX(), openLogBtnRect.centerY() + dp(3.2f), textPaint)
+        registerSidebarHit(openLogBtnRect, clipTop, clipBottom) {
+            isSidebarDrawerOpen = false
+            onReopenBootLogRequested?.invoke()
+            postInvalidateOnAnimation()
+        }
+        y += dp(42f)
+
+        // 2. One-Tap Instant RAM, GC & Cache Boost Button
+        val boostNowRect = RectF(left, y, left + width, y + dp(36f))
+        bgFillPaint.color = 0xFFC87D55.toInt()
+        canvas.drawRoundRect(boostNowRect, dp(7f), dp(7f), bgFillPaint)
+        strokePaint.color = 0xFFE6B86A.toInt()
+        canvas.drawRoundRect(boostNowRect, dp(7f), dp(7f), strokePaint)
+        textPaint.textSize = dp(9.2f)
+        canvas.drawText("JALANKAN INSTANT RAM, GC & CACHE BOOST SEKARANG", boostNowRect.centerX(), boostNowRect.centerY() + dp(3.2f), textPaint)
+        registerSidebarHit(boostNowRect, clipTop, clipBottom) {
+            val res = PerformanceBooster.runInstantBoost(context)
+            showHudToast(res.summaryMessage)
+            postInvalidateOnAnimation()
+        }
+        y += dp(42f)
+
+        // 3. Boost Status & Real-Time Telemetry Card
+        val infoCardH = dp(94f)
         val cardRect = RectF(left, y, left + width, y + infoCardH)
         bgFillPaint.color = 0xFF22211E.toInt()
         canvas.drawRoundRect(cardRect, dp(8f), dp(8f), bgFillPaint)
         strokePaint.color = 0xFF3A3732.toInt()
         canvas.drawRoundRect(cardRect, dp(8f), dp(8f), strokePaint)
 
-        leftTextPaint.textSize = dp(9.5f)
-        leftTextPaint.color = 0xFF4E8C57.toInt()
-        canvas.drawText("TELEMETRI MESIN REAL-TIME", left + dp(10f), y + dp(17f), leftTextPaint)
+        leftTextPaint.textSize = dp(9.2f)
+        leftTextPaint.color = 0xFF8CD996.toInt()
+        val activeBoostProf = PerformanceBooster.getActiveProfile(context)
+        canvas.drawText("PROFIL BOOST AKTIF: ${activeBoostProf.title}", left + dp(10f), y + dp(16f), leftTextPaint)
 
-        subTextPaint.textSize = dp(8.8f)
-        canvas.drawText("FPS: $currentFps  |  1% Low: $cachedOnePercentLow  |  Frame Time: ${String.format("%.1f", cachedFrameTimeMs)} ms", left + dp(10f), y + dp(35f), subTextPaint)
-        canvas.drawText("JVM Heap: $cachedJvmUsedMb / $cachedJvmMaxMb MB  |  RAM Perangkat: $cachedSysRamPct%", left + dp(10f), y + dp(52f), subTextPaint)
-        canvas.drawText("Renderer: $activeRendererLabel  |  ABI: ${NativeEngineBridge.getArchitectureAbi()}", left + dp(10f), y + dp(69f), subTextPaint)
+        subTextPaint.textSize = dp(8.5f)
+        canvas.drawText("FPS: $currentFps  |  1% Low: $cachedOnePercentLow  |  Frame Time: ${String.format("%.1f", cachedFrameTimeMs)} ms", left + dp(10f), y + dp(33f), subTextPaint)
+        canvas.drawText("JVM Heap: $cachedJvmUsedMb / $cachedJvmMaxMb MB  |  RAM Perangkat: $cachedSysRamPct%", left + dp(10f), y + dp(49f), subTextPaint)
+        canvas.drawText("Renderer: $activeRendererLabel  |  Jarak Pandang: ${PerformanceBooster.getRenderDistanceChunks(context)} Chunk", left + dp(10f), y + dp(65f), subTextPaint)
+        val boostSum = TextUtils.ellipsize(PerformanceBooster.getLastBoostSummary(context), subTextPaint, width - dp(20f), TextUtils.TruncateAt.END).toString()
+        canvas.drawText(boostSum, left + dp(10f), y + dp(82f), subTextPaint)
         y += infoCardH + dp(10f)
+
+        // 4. 4 Performance Boost Profile Presets
+        leftTextPaint.textSize = dp(9.2f)
+        leftTextPaint.color = 0xFFB8B2A6.toInt()
+        canvas.drawText("Pilih Preset Boost Performa (Otomatis Atur options.txt & Resolusi):", left, y + dp(11f), leftTextPaint)
+        y += dp(16f)
 
         y = drawSidebarDualButtons(
             canvas, left, y, halfW,
-            "KONSOL LOG BOOT", 0xFF4E8C57.toInt(),
+            "TURBO FPS (4 CHUNK)",
+            if (activeBoostProf == PerformanceBooster.BoostProfile.TURBO_FPS) 0xFF4E8C57.toInt() else 0xFF282623.toInt(),
             {
-                isSidebarDrawerOpen = false
-                onReopenBootLogRequested?.invoke()
+                val msg = PerformanceBooster.applyBoostProfile(context, PerformanceBooster.BoostProfile.TURBO_FPS)
+                showHudToast(msg)
+                postInvalidateOnAnimation()
             },
-            "STUDIO PENGATURAN", 0xFF5A7D9A.toInt(),
+            "PVP 120FPS (6 CHUNK)",
+            if (activeBoostProf == PerformanceBooster.BoostProfile.PVP_COMPETITIVE) 0xFF4E8C57.toInt() else 0xFF282623.toInt(),
+            {
+                val msg = PerformanceBooster.applyBoostProfile(context, PerformanceBooster.BoostProfile.PVP_COMPETITIVE)
+                showHudToast(msg)
+                postInvalidateOnAnimation()
+            },
+            clipTop, clipBottom
+        )
+
+        y = drawSidebarDualButtons(
+            canvas, left, y, halfW,
+            "SEIMBANG (8 CHUNK)",
+            if (activeBoostProf == PerformanceBooster.BoostProfile.BALANCED_STUDIO) 0xFF4E8C57.toInt() else 0xFF282623.toInt(),
+            {
+                val msg = PerformanceBooster.applyBoostProfile(context, PerformanceBooster.BoostProfile.BALANCED_STUDIO)
+                showHudToast(msg)
+                postInvalidateOnAnimation()
+            },
+            "VISUAL (12 CHUNK)",
+            if (activeBoostProf == PerformanceBooster.BoostProfile.HIGH_VISUAL) 0xFF4E8C57.toInt() else 0xFF282623.toInt(),
+            {
+                val msg = PerformanceBooster.applyBoostProfile(context, PerformanceBooster.BoostProfile.HIGH_VISUAL)
+                showHudToast(msg)
+                postInvalidateOnAnimation()
+            },
+            clipTop, clipBottom
+        )
+
+        // 5. Granular Boost Toggles
+        val curChunks = PerformanceBooster.getRenderDistanceChunks(context)
+        val noPartClouds = PerformanceBooster.isNoParticlesAndCloudsEnabled(context)
+        val noShadows = PerformanceBooster.isNoEntityShadowsEnabled(context)
+
+        y = drawSidebarDualButtons(
+            canvas, left, y, halfW,
+            "JARAK RENDER: $curChunks CHUNK [GANTI]", 0xFF3A5268.toInt(),
+            {
+                val nextC = PerformanceBooster.cycleRenderDistance(context)
+                showHudToast("Jarak Pandang diatur ke $nextC Chunk.")
+                postInvalidateOnAnimation()
+            },
+            if (noPartClouds) "AWAN & PARTIKEL: MINIMAL" else "AWAN & PARTIKEL: NORMAL",
+            if (noPartClouds) 0xFF4E8C57.toInt() else 0xFF282623.toInt(),
+            {
+                val nowMin = PerformanceBooster.toggleNoParticlesAndClouds(context)
+                showHudToast(if (nowMin) "Boost Aktif: Awan OFF & Partikel Minimal." else "Awan & Partikel dikembalikan Normal.")
+                postInvalidateOnAnimation()
+            },
+            clipTop, clipBottom
+        )
+
+        y = drawSidebarDualButtons(
+            canvas, left, y, halfW,
+            if (noShadows) "BAYANGAN ENTITAS: OFF" else "BAYANGAN ENTITAS: ON",
+            if (noShadows) 0xFF4E8C57.toInt() else 0xFF282623.toInt(),
+            {
+                val nowOff = PerformanceBooster.toggleNoEntityShadows(context)
+                showHudToast(if (nowOff) "Boost Aktif: Bayangan Entitas dimatikan." else "Bayangan Entitas diaktifkan.")
+                postInvalidateOnAnimation()
+            },
+            "STUDIO PENGATURAN LENGKAP", 0xFF5A7D9A.toInt(),
             {
                 isSidebarDrawerOpen = false
                 onQuickSettingsRequested?.invoke()
@@ -1769,6 +1926,17 @@ class ProHudOverlayView @JvmOverloads constructor(
                     performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                     return true
                 }
+                if (topBarLogBtnRect.contains(x, y)) {
+                    onReopenBootLogRequested?.invoke()
+                    performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                    return true
+                }
+                if (topBarBoostBtnRect.contains(x, y)) {
+                    val res = PerformanceBooster.runInstantBoost(context)
+                    showHudToast(res.summaryMessage)
+                    performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                    return true
+                }
                 if (topBarImeBtnRect.contains(x, y)) {
                     SystemImeHelper.openInGameDirectKeyboard(openChatFirst = true)
                     performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
@@ -1776,6 +1944,11 @@ class ProHudOverlayView @JvmOverloads constructor(
                 }
                 if (topBarJsonBtnRect.contains(x, y)) {
                     toggleSidebarDrawer(SidebarSection.SHARE_JSON)
+                    performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                    return true
+                }
+                if (topBarMainRect.contains(x, y)) {
+                    toggleSidebarDrawer(SidebarSection.TELEMETRY_LOG)
                     performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                     return true
                 }

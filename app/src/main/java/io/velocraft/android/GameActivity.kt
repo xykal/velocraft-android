@@ -32,6 +32,7 @@ import io.velocraft.android.engine.EngineDownloadService
 import io.velocraft.android.engine.FloatingDownloadOverlay
 import io.velocraft.android.engine.JvmOptimizer
 import io.velocraft.android.engine.MainMenuView
+import io.velocraft.android.engine.PerformanceBooster
 import io.velocraft.android.engine.RendererProfileManager
 import io.velocraft.android.engine.ResumableDownloadEngine
 import io.velocraft.android.util.SystemImeHelper
@@ -122,6 +123,9 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
             }
             onOpenKeybindEditorRequested = { selectedBtn ->
                 customModalView.openOnTab(CustomCanvasModalView.Tab.KEYBIND_CREATOR, selectedBtn)
+            }
+            onReopenBootLogRequested = {
+                bootLogOverlay.toggleLogOverlay()
             }
             onExitHudEditor = {
                 if (!jvmRunningInProcess) {
@@ -435,6 +439,7 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 provisioner.prepareDirectoriesAndConfigs(
                     includeFullMusicAssets = !ResumableDownloadEngine.isSkipMusicLiteEnabled(this)
                 )
+                PerformanceBooster.syncBoostSettingsToOptionsTxt(this@GameActivity)
                 val syncedShaders = RendererProfileManager.syncExternalShaderpacks(this, provisioner.gameDir)
                 VeloLogger.section(
                     "STAGE-1",
