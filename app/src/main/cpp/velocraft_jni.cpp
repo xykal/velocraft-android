@@ -2155,11 +2155,24 @@ Java_io_velocraft_android_bridge_NativeEngineBridge_nativeConfigureRendererEnv(
     setenv("LIBGL_NOERROR", "1", 1);
     setenv("LIBGL_NOINTOVLHACK", "1", 1);
     setenv("LIBGL_NOHIGHP", "1", 1);
-    setenv("LIBGL_SHRINK", IS_64BIT_ABI ? "0" : "2", 1);
+    unsetenv("LIBGL_SHRINK");
+    unsetenv("LIBGL_RECYCLEFBO");
 
     ensureStdioRedirectedToLog();
     updateAndroidLinkerSearchPath(internalLinkerPath);
     chdir((engineRoot + "/minecraft").c_str());
+
+    // Remove stale hs_err_pid*.log files from previous sessions so old crash logs are never re-emitted
+    if (DIR* cdir = opendir(".")) {
+        struct dirent* cent = nullptr;
+        while ((cent = readdir(cdir)) != nullptr) {
+            std::string cname = cent->d_name;
+            if (cname.rfind("hs_err_pid", 0) == 0) {
+                unlink(cname.c_str());
+            }
+        }
+        closedir(cdir);
+    }
 
     appendNativeLineToLogFile(
         "ENV",

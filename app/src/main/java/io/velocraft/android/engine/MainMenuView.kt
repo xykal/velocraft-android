@@ -23,6 +23,7 @@ import io.velocraft.android.auth.PlayerSessionManager
 import io.velocraft.android.controls.ControlProfileManager
 import io.velocraft.android.util.SystemImeHelper
 import io.velocraft.android.util.VeloLogger
+import io.velocraft.android.util.VeloVectorIcons
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -466,70 +467,18 @@ class MainMenuView @JvmOverloads constructor(
     }
 
     /**
-     * Draws clean geometric vector icons for navigation sidebar items & cards (zero emojis).
+     * Draws rich multi-layered geometric vector icons for navigation sidebar items & cards (zero emojis).
      */
     private fun drawNavVectorIcon(canvas: Canvas, iconType: Int, cx: Float, cy: Float, r: Float, color: Int) {
-        vectorIconPaint.color = color
-        vectorIconPaint.style = Paint.Style.STROKE
-        vectorIconPaint.strokeWidth = dp(1.5f)
-        vectorPath.reset()
-        when (iconType) {
-            0 -> {
-                // HOME: House roof + walls
-                vectorPath.moveTo(cx - r, cy - r * 0.1f)
-                vectorPath.lineTo(cx, cy - r * 0.95f)
-                vectorPath.lineTo(cx + r, cy - r * 0.1f)
-                vectorPath.moveTo(cx - r * 0.72f, cy - r * 0.2f)
-                vectorPath.lineTo(cx - r * 0.72f, cy + r * 0.85f)
-                vectorPath.lineTo(cx + r * 0.72f, cy + r * 0.85f)
-                vectorPath.lineTo(cx + r * 0.72f, cy - r * 0.2f)
-                canvas.drawPath(vectorPath, vectorIconPaint)
-            }
-            1 -> {
-                // MEMORY & ENGINE: CPU Chip + pins
-                tmpRect.set(cx - r * 0.65f, cy - r * 0.65f, cx + r * 0.65f, cy + r * 0.65f)
-                canvas.drawRoundRect(tmpRect, dp(2f), dp(2f), vectorIconPaint)
-                canvas.drawLine(cx - r, cy - r * 0.3f, cx - r * 0.65f, cy - r * 0.3f, vectorIconPaint)
-                canvas.drawLine(cx - r, cy + r * 0.3f, cx - r * 0.65f, cy + r * 0.3f, vectorIconPaint)
-                canvas.drawLine(cx + r * 0.65f, cy - r * 0.3f, cx + r, cy - r * 0.3f, vectorIconPaint)
-                canvas.drawLine(cx + r * 0.65f, cy + r * 0.3f, cx + r, cy + r * 0.3f, vectorIconPaint)
-            }
-            2 -> {
-                // MODS & MODRINTH: Isometric Cube
-                vectorPath.moveTo(cx, cy - r * 0.95f)
-                vectorPath.lineTo(cx + r * 0.85f, cy - r * 0.45f)
-                vectorPath.lineTo(cx + r * 0.85f, cy + r * 0.45f)
-                vectorPath.lineTo(cx, cy + r * 0.95f)
-                vectorPath.lineTo(cx - r * 0.85f, cy + r * 0.45f)
-                vectorPath.lineTo(cx - r * 0.85f, cy - r * 0.45f)
-                vectorPath.close()
-                vectorPath.moveTo(cx, cy - r * 0.95f)
-                vectorPath.lineTo(cx, cy + r * 0.95f)
-                canvas.drawPath(vectorPath, vectorIconPaint)
-            }
-            3 -> {
-                // CONTROLS & JSON: Tactical Sliders
-                canvas.drawLine(cx - r * 0.85f, cy - r * 0.45f, cx + r * 0.85f, cy - r * 0.45f, vectorIconPaint)
-                canvas.drawCircle(cx - r * 0.25f, cy - r * 0.45f, r * 0.24f, vectorIconPaint)
-                canvas.drawLine(cx - r * 0.85f, cy + r * 0.45f, cx + r * 0.85f, cy + r * 0.45f, vectorIconPaint)
-                canvas.drawCircle(cx + r * 0.3f, cy + r * 0.45f, r * 0.24f, vectorIconPaint)
-            }
-            4 -> {
-                // ACCOUNT: User Head + Shoulders
-                canvas.drawCircle(cx, cy - r * 0.35f, r * 0.38f, vectorIconPaint)
-                tmpRect.set(cx - r * 0.8f, cy + r * 0.15f, cx + r * 0.8f, cy + r * 1.1f)
-                canvas.drawArc(tmpRect, 180f, 180f, false, vectorIconPaint)
-            }
-            5 -> {
-                // LOGS: Terminal Prompt (> _)
-                vectorPath.moveTo(cx - r * 0.75f, cy - r * 0.45f)
-                vectorPath.lineTo(cx - r * 0.2f, cy)
-                vectorPath.lineTo(cx - r * 0.75f, cy + r * 0.45f)
-                vectorPath.moveTo(cx + r * 0.05f, cy + r * 0.45f)
-                vectorPath.lineTo(cx + r * 0.75f, cy + r * 0.45f)
-                canvas.drawPath(vectorPath, vectorIconPaint)
-            }
+        val accent = when (iconType) {
+            0 -> 0xFF68CE7C.toInt()
+            1 -> 0xFFE6B86A.toInt()
+            2 -> 0xFF6AA2CE.toInt()
+            3 -> 0xFF5FA869.toInt()
+            4 -> 0xFFC87D55.toInt()
+            else -> 0xFF68CE7C.toInt()
         }
+        VeloVectorIcons.drawUiIcon(canvas, iconType, cx, cy, r * 1.15f, color, accent)
     }
 
     private fun drawAtmosphericBackground(canvas: Canvas, w: Float, h: Float, sidebarW: Float) {

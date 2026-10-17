@@ -20,6 +20,7 @@ import android.view.MotionEvent
 import android.view.View
 import io.velocraft.android.bridge.NativeEngineBridge
 import io.velocraft.android.util.VeloLogger
+import io.velocraft.android.util.VeloVectorIcons
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
@@ -512,20 +513,35 @@ class BootLogOverlayView(
             val rPod1 = RectF(right - podW, animCenterY - ringRad, right, animCenterY - ringRad + podH)
             val rPod2 = RectF(right - podW, animCenterY + ringRad - podH, right, animCenterY + ringRad)
 
-            for ((pRect, info) in listOf(
+            for ((idx, pair) in listOf(
                 lPod1 to Triple("KELAS JVM DIMUAT", "$loadedClasses / $targetSplashClasses", true),
                 lPod2 to Triple("KECEPATAN LOADER", "${if (classesPerSec > 0) classesPerSec else 180} kls/dtk", false),
                 rPod1 to Triple("MEMORI HEAP JVM", "${if (jvmUsedRamMb > 0) jvmUsedRamMb else 256} / $jvmMaxRamMb MB", false),
                 rPod2 to Triple("TAHAP AKTIF (${currentStageIndex}/10)", "Waktu: ${elapsedSec} dtk", true)
-            )) {
+            ).withIndex()) {
+                val pRect = pair.first
+                val info = pair.second
                 canvas.drawRoundRect(pRect, 10f, 10f, cardBgPaint)
                 canvas.drawRoundRect(pRect, 10f, 10f, if (info.third) accentStrokePaint else strokePaint)
-                subPaint.textSize = u * 0.0145f
+                val iconRad = pRect.height() * 0.25f
+                val iconCx = pRect.left + iconRad + u * 0.014f
+                val iconCy = pRect.centerY()
+                val iconCol = if (info.third) Color.parseColor("#8CD996") else Color.parseColor("#E6B86A")
+                val iconId = when (idx) {
+                    0 -> 2
+                    1 -> 6
+                    2 -> 1
+                    else -> 5
+                }
+                VeloVectorIcons.drawUiIcon(canvas, iconId, iconCx, iconCy, iconRad, iconCol, iconCol)
+                val textLeft = iconCx + iconRad + u * 0.012f
+                val availPodTextW = (pRect.right - textLeft - u * 0.012f).coerceAtLeast(u * 0.05f)
+                subPaint.textSize = u * 0.0140f
                 subPaint.color = Color.parseColor("#9AA39C")
-                drawFittedText(canvas, info.first, pRect.left + u * 0.014f, pRect.top + pRect.height() * 0.40f, pRect.width() - u * 0.028f, subPaint)
-                titlePaint.textSize = u * 0.0195f
-                titlePaint.color = if (info.third) Color.parseColor("#8CD996") else Color.parseColor("#E6B86A")
-                drawFittedText(canvas, info.second, pRect.left + u * 0.014f, pRect.top + pRect.height() * 0.78f, pRect.width() - u * 0.028f, titlePaint)
+                drawFittedText(canvas, info.first, textLeft, pRect.top + pRect.height() * 0.40f, availPodTextW, subPaint)
+                titlePaint.textSize = u * 0.0190f
+                titlePaint.color = iconCol
+                drawFittedText(canvas, info.second, textLeft, pRect.top + pRect.height() * 0.78f, availPodTextW, titlePaint)
             }
         }
 

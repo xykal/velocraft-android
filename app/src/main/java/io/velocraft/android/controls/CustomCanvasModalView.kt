@@ -21,6 +21,7 @@ import io.velocraft.android.engine.PerformanceBooster
 import io.velocraft.android.engine.RendererProfileManager
 import io.velocraft.android.util.SystemImeHelper
 import io.velocraft.android.util.VeloLogger
+import io.velocraft.android.util.VeloVectorIcons
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -283,14 +284,25 @@ class CustomCanvasModalView(
         for ((i, tab) in Tab.values().withIndex()) {
             val tl = panelLeft + dp(12f) + i * (singleTabW + dp(6f))
             tabRects[i].set(tl, tabBarTop, tl + singleTabW, tabBarTop + tabH)
+            val isSel = activeTab == tab
             canvas.drawRoundRect(
                 tabRects[i],
                 dp(8f),
                 dp(8f),
-                if (activeTab == tab) activeGreenPaint else cardPaint
+                if (isSel) activeGreenPaint else cardPaint
             )
             canvas.drawRoundRect(tabRects[i], dp(8f), dp(8f), borderPaint)
-            drawCenteredButtonText(canvas, tab.title, tabRects[i])
+            val tabIconType = when (tab) {
+                Tab.RENDERER_ACCOUNT -> 1
+                Tab.CONTROLS_CURSOR -> 3
+                Tab.KEYBIND_CREATOR -> 2
+                Tab.DIAGNOSTIC_LOG -> 5
+            }
+            val iconCol = if (isSel) 0xFFF4F1EA.toInt() else 0xFFD6D2C8.toInt()
+            val iconAcc = if (isSel) 0xFFF4F1EA.toInt() else 0xFF68CE7C.toInt()
+            VeloVectorIcons.drawUiIcon(canvas, tabIconType, tabRects[i].left + dp(12f), tabRects[i].centerY(), dp(6.0f), iconCol, iconAcc)
+            tmpRect.set(tabRects[i].left + dp(20f), tabRects[i].top, tabRects[i].right - dp(4f), tabRects[i].bottom)
+            drawCenteredButtonText(canvas, tab.title, tmpRect)
         }
 
         // Status Sub-banner

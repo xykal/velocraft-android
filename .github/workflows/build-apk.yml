@@ -14,7 +14,7 @@ on:
       release_tag:
         description: "Tag versi untuk Draft Release"
         required: false
-        default: "v0.8.1-release"
+        default: "v0.8.2-release"
       create_draft_release:
         description: "Buat / Update Draft Release otomatis setelah build selesai"
         required: false
@@ -31,7 +31,7 @@ concurrency:
 
 jobs:
   build-and-draft-release:
-    name: Build Official Signed Release APKs (id.xyverse.minecraft - v0.8.1-release)
+    name: Build Official Signed Release APKs (id.xyverse.minecraft - v0.8.2-release)
     runs-on: ubuntu-latest
     if: >-
       github.event.repository.fork == false &&
@@ -120,14 +120,14 @@ jobs:
         run: |
           gradle :app:assembleRelease --no-daemon
           mkdir -p dist-apks
-          cp app/build/outputs/apk/release/app-arm64-v8a-release.apk dist-apks/Minecraft-Xyverse-v0.8.1-arm64-v8a-official-signed.apk
-          cp app/build/outputs/apk/release/app-armeabi-v7a-release.apk dist-apks/Minecraft-Xyverse-v0.8.1-armeabi-v7a-official-signed.apk
-          cp app/build/outputs/apk/release/app-universal-release.apk dist-apks/Minecraft-Xyverse-v0.8.1-universal-official-signed.apk
+          cp app/build/outputs/apk/release/app-arm64-v8a-release.apk dist-apks/Minecraft-Xyverse-v0.8.2-arm64-v8a-official-signed.apk
+          cp app/build/outputs/apk/release/app-armeabi-v7a-release.apk dist-apks/Minecraft-Xyverse-v0.8.2-armeabi-v7a-official-signed.apk
+          cp app/build/outputs/apk/release/app-universal-release.apk dist-apks/Minecraft-Xyverse-v0.8.2-universal-official-signed.apk
           cp app/keystore/xyverse-official-release.p12 dist-apks/xyverse-official-release.p12
 
           # Verify Official v1/v2/v3 APK Signature & Certificate Subject
           APKSIGNER="$ANDROID_HOME/build-tools/34.0.0/apksigner"
-          "$APKSIGNER" verify --verbose --print-certs dist-apks/Minecraft-Xyverse-v0.8.1-arm64-v8a-official-signed.apk
+          "$APKSIGNER" verify --verbose --print-certs dist-apks/Minecraft-Xyverse-v0.8.2-arm64-v8a-official-signed.apk
 
           # Fetch Real Android OpenJDK 17 HotSpot Runtimes (libjli.so + libjvm.so + modules) for Release Mirror
           curl -fL "https://github.com/PojavLauncherTeam/android-openjdk-build-multiarch/releases/download/jre17-ec28559/jre17-arm64-20210825-release.tar.xz" \
@@ -139,7 +139,7 @@ jobs:
       - name: Upload Official Signed Release APK & OpenJDK Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Minecraft-Xyverse-Official-Signed-v0.8.1-release
+          name: Minecraft-Xyverse-Official-Signed-v0.8.2-release
           path: |
             dist-apks/*.apk
             dist-apks/*.tar.xz
@@ -150,39 +150,34 @@ jobs:
         if: ${{ github.event_name == 'push' || inputs.create_draft_release == true }}
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.release_tag || 'v0.8.1-release' }}
-          name: "Minecraft (Official Signed Release ${{ inputs.release_tag || 'v0.8.1-release' }} - id.xyverse.minecraft) [DRAFT]"
+          tag_name: ${{ inputs.release_tag || 'v0.8.2-release' }}
+          name: "Minecraft (Official Signed Release ${{ inputs.release_tag || 'v0.8.2-release' }} - id.xyverse.minecraft) [DRAFT]"
           draft: true
           prerelease: false
           generate_release_notes: true
           body: |
-            ### Minecraft - Java Porting Edition (`v0.8.1-release` Official Signed) [DRAFT]
+            ### Minecraft - Java Porting Edition (`v0.8.2-release` Official Signed) [DRAFT]
             - **Package ID Resmi:** **`id.xyverse.minecraft`**
             - **Sertifikat Keystore Produksi (v1 + v2 + v3 Signed):**
               - **SHA-256 Fingerprint:** `F2:BF:14:62:F1:F8:02:BA:3D:6A:29:78:B3:11:D4:5F:39:13:81:21:13:24:4B:A4:90:D9:AF:7A:43:D7:22:61`
 
-            #### Pembaruan Utama di `v0.8.1-release`:
-            1. **Perbaikan Total Crash Saat Mau Muncul Splash Mojang (`v0.8.0` Regression Fix):**
-               - Menghapus tautan `GLESv3` dari `CMakeLists.txt` yang sebelumnya membuat simbol `libGLESv3.so` sistem Android mendahului `libgl4es_114.so` di `RTLD_GLOBAL`.
-               - Mengompilasi `velocraft_turbo.cpp` langsung ke dalam `libvelocraft_bridge.so` (`libpojavexec.so`) sehingga tidak terjadi pemisahan state antar *linker namespace* (`clns-XX` vs `default` milik OpenJDK), serta mengembalikan jalur pemuatan simbol LWJGL (`ndlopen_bugfix`) dan `enforceRendererModCompatibility()` yang terbukti 100% stabil di `v0.7.9`.
-               - Memperbaiki `pojavMakeCurrent` agar mereset `surfaceNeedsRebind = false` saat `EGLSurface` pertama dibuat (mencegah penghancuran `EGLSurface` di Frame 1 Mojang Splash) serta menghapus `LIBGL_RECYCLEFBO=1` dan mutasi register `vmsr fpscr`.
-            2. **Desain Ulang Total UI/UX "Tactical Voxel Studio Command Deck" (Berlapis, Bertekstur 3D & Detail):**
-               - **Launcher Console (`MainMenuView`)**: Latar belakang atmosferik bergradasi dengan kisi isometrik halus, **Top Tactical Telemetry Header Bar** dengan indikator LED status aktif (`C++ TURBO .SO AKTIF`, `SKALA RENDER %`, `RAM & ABI`), kartu berlapis 3D (`drawStudioCard`) dengan *drop shadow*, *top specular glass highlight*, dan siku aksen sudut, serta tombol 3D taktil (`drawTactileButton`) dengan bibir 3D bawah dan *icon well* di Sidebar.
-               - **Layar Tunggu Mojang Splash (`BootLogOverlayView`)**: Menambahkan pendaran radial di belakang reaktor Voxel 3D, **4 Pod Telemetri Real-Time** di sisi kiri-kanan, **10-Stage Segmented Progress Stepper**, dan kartu Hadits/Hikmah berbingkai 3D langsung di layar hitam sambil menunggu Mojang Splash.
-               - **HUD In-Game & Sidebar (`ProHudOverlayView`)**: Tombol HUD bergradasi 3D dengan *inner bevel* & *top specular highlight* yang mengikuti slider **Opasitas (`8%–100%`)**, serta kartu slider interaktif di Sidebar.
-            3. **Boost FPS Nyata untuk HP Low-End / Redmi A2 (`25–35+ FPS`):**
-               - Memperbaiki bug `JvmOptimizer.getResolutionScalePct` & `pojavInit()` yang sebelumnya mengembalikan skala resolusi ke `100%` (`1600x720`). Kini otomatis menggunakan **Skala Hardware 60% (`960x432` — hemat 64% piksel GPU)** pada perangkat 32-bit (`armeabi-v7a`) dan **80%** pada 64-bit, dengan slider bebas **50%–100%**.
-               - Memperbarui `.minecraft/options.txt` secara otomatis (`.velocraft_turbo_v081`) dengan `renderDistance:2` (32-bit), `ao:false` (boolean valid MC 1.20.4), `prioritizeChunkUpdates:0`, `biomeBlendRadius:0`, `entityShadows:false`, `particles:2`, `mipmapLevels:0`, serta optimasi tekstur `LIBGL_SHRINK=2` & `LIBGL_NOHIGHP=1`.
+            #### Pembaruan Utama di `v0.8.2-release`:
+            1. **Perbaikan Total `GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT` Saat Mojang Splash Muncul:**
+               - Menghapus variabel lingkungan `LIBGL_SHRINK=2` (`unsetenv("LIBGL_SHRINK")`) yang pada `libgl4es_114.so` (`src/gl/framebuffers.c`) memicu bug `unshrinking shrinked texture for FBO` (`tex->width *= 1<<tex->shrink`), sehingga ukuran tekstur Color dan Depth FBO `WindowFramebuffer` (`net.minecraft.class_6364`) tidak sinkron di GPU PowerVR GE8320 (`GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT`).
+               - Membersihkan file `hs_err_pid*.log` lama sebelum peluncuran JVM agar log crash dari sesi sebelumnya tidak pernah muncul kembali, serta menghapus baris komentar `#` pada `.minecraft/options.txt` (`.velocraft_turbo_v082`).
+            2. **Mesin Ikon Vektor Kustom Baru (`VeloVectorIcons.kt`) di Seluruh UI & Semua Tombol Kontrol In-Game:**
+               - **Semua Tombol Kontrol In-Game (`ProHudOverlayView`)**: Setiap tombol kontrol (`W`, `A`, `S`, `D`, `ATK`, `PLACE`, `JUMP`, `SNEAK`, `SPRINT`, `INV`, `OFF`, `COMBO`, `DROP`, `PICK`, `MENU`, `ESC`, `F3`, `CAM`, `CHAT`, `KEYB`, `KURSOR`, `GYRO`, `EDIT HUD`) kini memiliki ikon vektor taktis berlapis (Panah Berkembar Aerodinamis, Pedang Berlian 45° + Retikel, Kubus Voxel 3D + Spark `+`, Peti Harta 3D, Perisai Offhand, Gimbal Gyro 3D, Keycap Mekanikal, Lensa Kamera, dll.) lengkap dengan pendaran halo lembut dan badge label presisi.
+               - **Semua Layar UI (`MainMenuView`, `BootLogOverlayView`, `CustomCanvasModalView`, Top Telemetry Bar & Sidebar)**: Seluruh ikon navigasi, pod telemetri, tab modal pengaturan, dan tombol cepat Top Bar diperbarui menggunakan `VeloVectorIcons` multi-layer.
 
             #### Pilihan File APK Resmi (`id.xyverse.minecraft`):
-            - **`Minecraft-Xyverse-v0.8.1-arm64-v8a-official-signed.apk`** *(Khusus HP 64-bit)*
-            - **`Minecraft-Xyverse-v0.8.1-armeabi-v7a-official-signed.apk`** *(Khusus HP 32-bit seperti Redmi A2)*
-            - **`Minecraft-Xyverse-v0.8.1-universal-official-signed.apk`** *(Universal semua HP Android)*
+            - **`Minecraft-Xyverse-v0.8.2-arm64-v8a-official-signed.apk`** *(Khusus HP 64-bit)*
+            - **`Minecraft-Xyverse-v0.8.2-armeabi-v7a-official-signed.apk`** *(Khusus HP 32-bit seperti Redmi A2)*
+            - **`Minecraft-Xyverse-v0.8.2-universal-official-signed.apk`** *(Universal semua HP Android)*
             - **`jre-arm64-v8a-openjdk.tar.xz`** & **`jre-armeabi-v7a-openjdk.tar.xz`** *(Arsip Real OpenJDK HotSpot Android)*
           files: |
-            dist-apks/Minecraft-Xyverse-v0.8.1-arm64-v8a-official-signed.apk
-            dist-apks/Minecraft-Xyverse-v0.8.1-armeabi-v7a-official-signed.apk
-            dist-apks/Minecraft-Xyverse-v0.8.1-universal-official-signed.apk
+            dist-apks/Minecraft-Xyverse-v0.8.2-arm64-v8a-official-signed.apk
+            dist-apks/Minecraft-Xyverse-v0.8.2-armeabi-v7a-official-signed.apk
+            dist-apks/Minecraft-Xyverse-v0.8.2-universal-official-signed.apk
             dist-apks/jre-arm64-v8a-openjdk.tar.xz
             dist-apks/jre-armeabi-v7a-openjdk.tar.xz
             dist-apks/xyverse-official-release.p12

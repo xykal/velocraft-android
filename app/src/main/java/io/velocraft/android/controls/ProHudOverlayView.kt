@@ -22,6 +22,7 @@ import io.velocraft.android.engine.ModrinthSyncManager
 import io.velocraft.android.engine.PerformanceBooster
 import io.velocraft.android.util.SystemImeHelper
 import io.velocraft.android.util.VeloLogger
+import io.velocraft.android.util.VeloVectorIcons
 import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.max
@@ -641,24 +642,80 @@ class ProHudOverlayView @JvmOverloads constructor(
                 canvas.drawRoundRect(tmpBtnRect, cornerRad, cornerRad, strokePaint)
             }
 
-            // 5. Auto-fitted button label (scales with effectiveOpacity)
-            textPaint.textSize = when {
-                btn.label.length >= 8 -> dp(8.8f)
-                btn.label.length >= 6 -> dp(9.8f)
-                else -> dp(11.4f)
-            }
-            val maxLabelW = halfW * 1.74f
-            val labelStr = if (!btn.isVisible && isEditMode) "${btn.label} [OFF]" else btn.label
-            while (textPaint.measureText(labelStr) > maxLabelW && textPaint.textSize > dp(7.2f)) {
-                textPaint.textSize -= dp(0.5f)
-            }
-            textPaint.color = if (isSelectedInEditor) {
-                0xFFF4F1EA.toInt()
+            // 5. Custom Tactical Vector Icon + Crisp Micro-Label (both scale with effectiveOpacity)
+            val iconAlpha = (effectiveOpacity + 0.14f).coerceIn(0.16f, 1.0f)
+            val iconPrimaryCol = if (isSelectedInEditor || isPressed) 0xFFF4F1EA.toInt() else 0xFFEAE5DC.toInt()
+            val iconAccentCol = btn.accentHex
+            val isWidePill = btn.shape == ButtonShape.PILL || halfW > halfH * 1.24f
+
+            if (isWidePill) {
+                val iconR = (halfH * 0.50f).coerceIn(dp(6.5f), dp(14f))
+                val iconCx = cx - halfW + iconR + dp(6.0f)
+                VeloVectorIcons.drawControlActionIcon(
+                    canvas = canvas,
+                    action = btn.actionType,
+                    keyCodeOrButton = btn.keyCodeOrButton,
+                    cx = iconCx,
+                    cy = cy,
+                    r = iconR,
+                    primaryColor = iconPrimaryCol,
+                    accentColor = iconAccentCol,
+                    alphaScale = iconAlpha
+                )
+
+                val textStartLeft = iconCx + iconR + dp(3.0f)
+                val textRight = cx + halfW - dp(4.0f)
+                val availW = (textRight - textStartLeft).coerceAtLeast(dp(18f))
+                val textCenterX = (textStartLeft + textRight) * 0.5f
+
+                textPaint.textSize = dp(8.8f)
+                val labelStr = if (!btn.isVisible && isEditMode) "${btn.label}*" else btn.label
+                while (textPaint.measureText(labelStr) > availW && textPaint.textSize > dp(6.4f)) {
+                    textPaint.textSize -= dp(0.4f)
+                }
+                textPaint.color = if (isSelectedInEditor) {
+                    0xFFF4F1EA.toInt()
+                } else {
+                    modulateAlpha(0xFFF4F1EA.toInt(), (effectiveOpacity + 0.10f).coerceIn(0.14f, 1.0f))
+                }
+                val textY = cy - (textPaint.descent() + textPaint.ascent()) / 2f
+                canvas.drawText(labelStr, textCenterX, textY, textPaint)
             } else {
-                modulateAlpha(0xFFF4F1EA.toInt(), (effectiveOpacity + 0.08f).coerceIn(0.12f, 1.0f))
+                // Circle or Square/RoundRect Button: Sculpted Vector Icon on upper center + Label Badge below
+                val minHalf = min(halfW, halfH)
+                val iconR = (minHalf * 0.44f).coerceIn(dp(7.5f), dp(22f))
+                val iconCy = cy - halfH * 0.17f
+                VeloVectorIcons.drawControlActionIcon(
+                    canvas = canvas,
+                    action = btn.actionType,
+                    keyCodeOrButton = btn.keyCodeOrButton,
+                    cx = cx,
+                    cy = iconCy,
+                    r = iconR,
+                    primaryColor = iconPrimaryCol,
+                    accentColor = iconAccentCol,
+                    alphaScale = iconAlpha
+                )
+
+                textPaint.textSize = when {
+                    btn.label.length >= 7 -> dp(7.2f)
+                    btn.label.length >= 5 -> dp(7.8f)
+                    else -> dp(8.6f)
+                }
+                val maxLabelW = halfW * 1.68f
+                val labelStr = if (!btn.isVisible && isEditMode) "${btn.label}*" else btn.label
+                while (textPaint.measureText(labelStr) > maxLabelW && textPaint.textSize > dp(6.0f)) {
+                    textPaint.textSize -= dp(0.4f)
+                }
+                textPaint.color = if (isSelectedInEditor) {
+                    0xFFF4F1EA.toInt()
+                } else {
+                    modulateAlpha(0xFFDCD7CC.toInt(), (effectiveOpacity + 0.08f).coerceIn(0.12f, 1.0f))
+                }
+                val labelCy = cy + halfH * 0.56f
+                val textY = labelCy - (textPaint.descent() + textPaint.ascent()) / 2f
+                canvas.drawText(labelStr, cx, textY, textPaint)
             }
-            val textY = cy - (textPaint.descent() + textPaint.ascent()) / 2f
-            canvas.drawText(labelStr, cx, textY, textPaint)
             textPaint.color = 0xFFF4F1EA.toInt()
         }
 
@@ -694,7 +751,7 @@ class ProHudOverlayView @JvmOverloads constructor(
         val rightBtnW = dp(62f)
         val gap = dp(4.5f)
 
-        // 1A. Left Quick-Trigger Pill: Slide-Out Sidebar Button with Vector Hamburger/Sliders Icon
+        // 1A. Left Quick-Trigger Pill: Slide-Out Sidebar Button with Custom Command Deck Icon
         topBarSidebarBtnRect.set(startX, top, startX + sidebarBtnW, top + barH)
         bgFillPaint.color = if (isSidebarDrawerOpen) 0xFF4E8C57.toInt() else 0xEB1A1917.toInt()
         canvas.drawRoundRect(topBarSidebarBtnRect, dp(7f), dp(7f), bgFillPaint)
@@ -702,19 +759,22 @@ class ProHudOverlayView @JvmOverloads constructor(
         strokePaint.strokeWidth = dp(1.3f)
         canvas.drawRoundRect(topBarSidebarBtnRect, dp(7f), dp(7f), strokePaint)
 
-        val iconCx = topBarSidebarBtnRect.left + dp(12f)
-        val iconCy = topBarSidebarBtnRect.centerY()
-        iconPaint.color = 0xFFF4F1EA.toInt()
-        iconPaint.strokeWidth = dp(1.5f)
-        canvas.drawLine(iconCx - dp(5f), iconCy - dp(4f), iconCx + dp(5f), iconCy - dp(4f), iconPaint)
-        canvas.drawLine(iconCx - dp(5f), iconCy, iconCx + dp(5f), iconCy, iconPaint)
-        canvas.drawLine(iconCx - dp(5f), iconCy + dp(4f), iconCx + dp(5f), iconCy + dp(4f), iconPaint)
+        VeloVectorIcons.drawControlActionIcon(
+            canvas = canvas,
+            action = ActionType.SIDEBAR_DRAWER_TOGGLE,
+            keyCodeOrButton = 0,
+            cx = topBarSidebarBtnRect.left + dp(13f),
+            cy = topBarSidebarBtnRect.centerY(),
+            r = dp(6.8f),
+            primaryColor = 0xFFF4F1EA.toInt(),
+            accentColor = 0xFF5FA869.toInt()
+        )
 
         textPaint.textSize = dp(8.2f)
         textPaint.color = 0xFFF4F1EA.toInt()
         canvas.drawText(
             "SIDEBAR",
-            topBarSidebarBtnRect.left + dp(46f),
+            topBarSidebarBtnRect.left + dp(47f),
             topBarSidebarBtnRect.centerY() + dp(3.0f),
             textPaint
         )
@@ -725,10 +785,10 @@ class ProHudOverlayView @JvmOverloads constructor(
         canvas.drawRoundRect(topBarLogBtnRect, dp(7f), dp(7f), bgFillPaint)
         strokePaint.color = 0xFF5FA869.toInt()
         canvas.drawRoundRect(topBarLogBtnRect, dp(7f), dp(7f), strokePaint)
-        drawVectorIcon(canvas, 4, topBarLogBtnRect.left + dp(11f), topBarLogBtnRect.centerY(), dp(4.8f), 0xFFF4F1EA.toInt())
+        VeloVectorIcons.drawUiIcon(canvas, 5, topBarLogBtnRect.left + dp(12f), topBarLogBtnRect.centerY(), dp(6.2f), 0xFFF4F1EA.toInt(), 0xFF5FA869.toInt())
         canvas.drawText(
             "LOG",
-            topBarLogBtnRect.left + dp(34f),
+            topBarLogBtnRect.left + dp(35f),
             topBarLogBtnRect.centerY() + dp(3.0f),
             textPaint
         )
@@ -740,7 +800,16 @@ class ProHudOverlayView @JvmOverloads constructor(
         canvas.drawRoundRect(topBarImeBtnRect, dp(7f), dp(7f), bgFillPaint)
         strokePaint.color = 0xFF5A7D9A.toInt()
         canvas.drawRoundRect(topBarImeBtnRect, dp(7f), dp(7f), strokePaint)
-        drawVectorIcon(canvas, 3, topBarImeBtnRect.left + dp(11f), topBarImeBtnRect.centerY(), dp(5.0f), 0xFFF4F1EA.toInt())
+        VeloVectorIcons.drawControlActionIcon(
+            canvas = canvas,
+            action = ActionType.IME_KEYBOARD_TOGGLE,
+            keyCodeOrButton = 0,
+            cx = topBarImeBtnRect.left + dp(12f),
+            cy = topBarImeBtnRect.centerY(),
+            r = dp(6.4f),
+            primaryColor = 0xFFF4F1EA.toInt(),
+            accentColor = 0xFF5A7D9A.toInt()
+        )
         textPaint.textSize = dp(8.0f)
         canvas.drawText("IME KEY", topBarImeBtnRect.left + dp(39f), topBarImeBtnRect.centerY() + dp(2.9f), textPaint)
 
@@ -749,7 +818,7 @@ class ProHudOverlayView @JvmOverloads constructor(
         canvas.drawRoundRect(topBarJsonBtnRect, dp(7f), dp(7f), bgFillPaint)
         strokePaint.color = 0xFFC87D55.toInt()
         canvas.drawRoundRect(topBarJsonBtnRect, dp(7f), dp(7f), strokePaint)
-        drawVectorIcon(canvas, 1, topBarJsonBtnRect.left + dp(11f), topBarJsonBtnRect.centerY(), dp(4.8f), 0xFFF4F1EA.toInt())
+        VeloVectorIcons.drawUiIcon(canvas, 7, topBarJsonBtnRect.left + dp(11f), topBarJsonBtnRect.centerY(), dp(5.8f), 0xFFF4F1EA.toInt(), 0xFFC87D55.toInt())
         canvas.drawText("JSON", topBarJsonBtnRect.left + dp(34f), topBarJsonBtnRect.centerY() + dp(2.9f), textPaint)
 
         topBarBoostBtnRect.set(topBarJsonBtnRect.left - gap - boostBtnW, top, topBarJsonBtnRect.left - gap, top + barH)
@@ -757,7 +826,7 @@ class ProHudOverlayView @JvmOverloads constructor(
         canvas.drawRoundRect(topBarBoostBtnRect, dp(7f), dp(7f), bgFillPaint)
         strokePaint.color = 0xFFE6B86A.toInt()
         canvas.drawRoundRect(topBarBoostBtnRect, dp(7f), dp(7f), strokePaint)
-        drawVectorIcon(canvas, 4, topBarBoostBtnRect.left + dp(11f), topBarBoostBtnRect.centerY(), dp(4.8f), 0xFFE6B86A.toInt())
+        VeloVectorIcons.drawUiIcon(canvas, 6, topBarBoostBtnRect.left + dp(12f), topBarBoostBtnRect.centerY(), dp(6.2f), 0xFFE6B86A.toInt(), 0xFFE6B86A.toInt())
         canvas.drawText("BOOST", topBarBoostBtnRect.left + dp(38f), topBarBoostBtnRect.centerY() + dp(2.9f), textPaint)
 
         // 3. Center Maximized Telemetry Strip
@@ -842,60 +911,12 @@ class ProHudOverlayView @JvmOverloads constructor(
      * 4 = Telemetry/Terminal Pulse
      */
     private fun drawVectorIcon(canvas: Canvas, iconType: Int, cx: Float, cy: Float, r: Float, color: Int) {
-        iconPaint.color = color
-        iconPaint.strokeWidth = dp(1.5f)
         when (iconType) {
-            0 -> {
-                // Sliders / Controls Vector Icon
-                canvas.drawLine(cx - r, cy - r * 0.55f, cx + r, cy - r * 0.55f, iconPaint)
-                canvas.drawLine(cx - r, cy + r * 0.55f, cx + r, cy + r * 0.55f, iconPaint)
-                bgFillPaint.color = color
-                canvas.drawCircle(cx - r * 0.3f, cy - r * 0.55f, r * 0.32f, bgFillPaint)
-                canvas.drawCircle(cx + r * 0.35f, cy + r * 0.55f, r * 0.32f, bgFillPaint)
-            }
-            1 -> {
-                // Share / JSON Network Nodes Icon
-                canvas.drawLine(cx + r * 0.5f, cy - r * 0.65f, cx - r * 0.55f, cy, iconPaint)
-                canvas.drawLine(cx - r * 0.55f, cy, cx + r * 0.5f, cy + r * 0.65f, iconPaint)
-                bgFillPaint.color = color
-                canvas.drawCircle(cx + r * 0.5f, cy - r * 0.65f, r * 0.28f, bgFillPaint)
-                canvas.drawCircle(cx - r * 0.55f, cy, r * 0.28f, bgFillPaint)
-                canvas.drawCircle(cx + r * 0.5f, cy + r * 0.65f, r * 0.28f, bgFillPaint)
-            }
-            2 -> {
-                // Modrinth / Download Isometric Cube + Arrow Icon
-                vectorIconPath.reset()
-                vectorIconPath.moveTo(cx, cy - r * 0.9f)
-                vectorIconPath.lineTo(cx + r * 0.85f, cy - r * 0.35f)
-                vectorIconPath.lineTo(cx + r * 0.85f, cy + r * 0.45f)
-                vectorIconPath.lineTo(cx, cy + r * 0.95f)
-                vectorIconPath.lineTo(cx - r * 0.85f, cy + r * 0.45f)
-                vectorIconPath.lineTo(cx - r * 0.85f, cy - r * 0.35f)
-                vectorIconPath.close()
-                canvas.drawPath(vectorIconPath, iconPaint)
-                canvas.drawLine(cx, cy - r * 0.35f, cx, cy + r * 0.4f, iconPaint)
-            }
-            3 -> {
-                // Keyboard IME Vector Icon
-                tmpBtnRect.set(cx - r, cy - r * 0.68f, cx + r, cy + r * 0.68f)
-                canvas.drawRoundRect(tmpBtnRect, dp(2.2f), dp(2.2f), iconPaint)
-                canvas.drawLine(cx - r * 0.5f, cy + r * 0.28f, cx + r * 0.5f, cy + r * 0.28f, iconPaint)
-                bgFillPaint.color = color
-                canvas.drawCircle(cx - r * 0.45f, cy - r * 0.15f, dp(1.2f), bgFillPaint)
-                canvas.drawCircle(cx, cy - r * 0.15f, dp(1.2f), bgFillPaint)
-                canvas.drawCircle(cx + r * 0.45f, cy - r * 0.15f, dp(1.2f), bgFillPaint)
-            }
-            else -> {
-                // Telemetry Pulse / Terminal Icon
-                vectorIconPath.reset()
-                vectorIconPath.moveTo(cx - r, cy + r * 0.1f)
-                vectorIconPath.lineTo(cx - r * 0.4f, cy + r * 0.1f)
-                vectorIconPath.lineTo(cx - r * 0.1f, cy - r * 0.75f)
-                vectorIconPath.lineTo(cx + r * 0.25f, cy + r * 0.75f)
-                vectorIconPath.lineTo(cx + r * 0.55f, cy + r * 0.1f)
-                vectorIconPath.lineTo(cx + r, cy + r * 0.1f)
-                canvas.drawPath(vectorIconPath, iconPaint)
-            }
+            0 -> VeloVectorIcons.drawUiIcon(canvas, 3, cx, cy, r * 1.12f, color, 0xFF5FA869.toInt())
+            1 -> VeloVectorIcons.drawUiIcon(canvas, 7, cx, cy, r * 1.12f, color, 0xFFC87D55.toInt())
+            2 -> VeloVectorIcons.drawUiIcon(canvas, 2, cx, cy, r * 1.12f, color, 0xFF5A7D9A.toInt())
+            3 -> VeloVectorIcons.drawControlActionIcon(canvas, ActionType.IME_KEYBOARD_TOGGLE, 0, cx, cy, r * 1.12f, color, 0xFF5A7D9A.toInt())
+            else -> VeloVectorIcons.drawUiIcon(canvas, 6, cx, cy, r * 1.12f, color, 0xFFE6B86A.toInt())
         }
     }
 

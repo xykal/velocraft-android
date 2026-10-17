@@ -88,7 +88,7 @@ class DirectBootProvisioner(private val context: Context) {
 
     private fun writePreTunedOptionsTxt(opts: JSONObject, includeFullMusicAssets: Boolean) {
         val optionsFile = File(gameDir, "options.txt")
-        val turboMarker = File(configDir, ".velocraft_turbo_v081")
+        val turboMarker = File(configDir, ".velocraft_turbo_v082")
         val hw = JvmOptimizer.detectHardware(context)
         val isLowEndDevice = !hw.is64Bit || hw.totalRamMb <= 3600
 
@@ -127,10 +127,9 @@ class DirectBootProvisioner(private val context: Context) {
             appendLine("onboardAccessibility:false")
             appendLine("soundCategory_music:$musicVolume")
             appendLine("soundCategory_record:$musicVolume")
-            appendLine("# Auto-tuned by VeloCraft Turbo C++ v0.8.1 for ${hw.socModel} (${hw.totalRamMb}MB RAM, ABI=${hw.abi})")
         }
         optionsFile.writeText(lines)
-        turboMarker.writeText("v0.8.1\n")
+        turboMarker.writeText("v0.8.2\n")
     }
 
     /**
