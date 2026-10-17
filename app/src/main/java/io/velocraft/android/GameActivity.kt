@@ -1,6 +1,7 @@
 package io.velocraft.android
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -13,6 +14,7 @@ import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.widget.FrameLayout
+import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -23,6 +25,7 @@ import io.velocraft.android.controls.CustomCanvasModalView
 import io.velocraft.android.controls.GamepadInputRouter
 import io.velocraft.android.controls.GyroAimController
 import io.velocraft.android.controls.ProHudOverlayView
+import io.velocraft.android.engine.AccountManager
 import io.velocraft.android.engine.BootLogOverlayView
 import io.velocraft.android.engine.DirectBootProvisioner
 import io.velocraft.android.engine.EngineDownloadService
@@ -31,6 +34,7 @@ import io.velocraft.android.engine.JvmOptimizer
 import io.velocraft.android.engine.MainMenuView
 import io.velocraft.android.engine.RendererProfileManager
 import io.velocraft.android.engine.ResumableDownloadEngine
+import io.velocraft.android.util.SystemImeHelper
 import io.velocraft.android.util.VeloLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -41,16 +45,21 @@ import java.io.File
 /**
  * Minecraft (Java Porting Edition) Main Console & Direct Game Activity.
  *
- * 100% Custom Canvas UI (Zero stock Android Toast/AlertDialog/SeekBar/Switch, Zero Emojis, Zero Simulation):
- * 1. MainMenuView: 6-Page Studio Launcher Console with Left Sidebar (Beranda, Memori & Engine,
- *    Mods & Shader, Kontrol & HUD, Akun Pemain, Log Diagnostik).
- * 2. BootLogOverlayView: Live Boot Terminal & Stage Progress Overlay shown while OpenJDK HotSpot
- *    (`libjli.so` / `libjvm.so`) and Fabric Loader (`KnotClient`) boot, streaming real-time native
- *    `stdout`/`stderr` and `latest.log` lines so the screen is never blank while booting.
- * 3. ProHudOverlayView: Multi-touch PvP HUD with Toggleable Virtual Mouse Cursor ("CURSOR") & Visual HUD Editor.
- * 4. CustomCanvasModalView: In-game 4-tab modal for Renderer/Shader/Account/Keybind/Logs.
+ * v0.7.8-release Upgrades:
+ * - Zero-Relog Background Persistence: Static process-level `jvmRunningInProcess` state + EGL Pbuffer
+ *   fallback + Back-gesture interception so briefly leaving the app or swiping Back never destroys
+ *   the Activity or restarts the OpenJDK JVM session.
+ * - GL4ES 1.1.5 World-Join Safe VBO Guard (`enforceRendererModCompatibility`).
+ * - Slide-Out In-Game Sidebar Menu & Maximized Top Telemetry Bar (`ProHudOverlayView`).
+ * - Android System IME Keyboard (`SystemImeHelper`) + Microsoft OAuth2 / Offline Account (`AccountManager`).
+ * - Live Modrinth v2 Mod Sync & Shareable Control `.JSON` Export/Import.
  */
 class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
+
+    companion object {
+        @Volatile
+        var jvmRunningInProcess: Boolean = false
+    }
 
     private val activityScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private lateinit var gameSurfaceView: SurfaceView
@@ -63,9 +72,6 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
     private lateinit var fabricStateBridge: FabricStateBridge
     private lateinit var provisioner: DirectBootProvisioner
 
-    @Volatile
-    private var jvmStarted = false
-
     private val downloadListener: (ResumableDownloadEngine.DownloadProgressState) -> Unit = { state ->
         mainMenuView.refreshState(state)
         if (!state.isRunning && state.percent >= 100) {
@@ -76,7 +82,10 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        VeloLogger.section("BOOT", "GameActivity.onCreate() started (v0.7.7-release ModMenu + Cursor/Window Sync + Studio HUD)")
+        VeloLogger.section(
+            "BOOT",
+            "GameActivity.onCreate() started (v0.7.8-release World-Join VBO Guard + Zero-Relog + Sidebar + Modrinth + IME + JSON)"
+        )
 
         val hw = JvmOptimizer.detectHardware(this)
         val effectiveRenderer = RendererProfileManager.resolveEffectiveBackend(this)
@@ -88,7 +97,9 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
         )
 
         provisioner = DirectBootProvisioner(this)
-        provisioner.prepareDirectoriesAndConfigs()
+        if (!jvmRunningInProcess) {
+            provisioner.prepareDirectoriesAndConfigs()
+        }
 
         val rootContainer = FrameLayout(this)
 
@@ -100,7 +111,7 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
         // 2. High-precision 200Hz Gyroscope Aim Controller
         gyroController = GyroAimController(this)
 
-        // 3. Multi-Touch Pro PvP HUD + Virtual Mouse Cursor Overlay
+        // 3. Multi-Touch Pro PvP HUD + Slide-Out Sidebar + Maximized Top Stats Bar
         proHudOverlay = ProHudOverlayView(this).apply {
             activeRendererLabel = effectiveRenderer.id.uppercase()
             onGyroToggleRequested = { enabled ->
@@ -113,7 +124,7 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 customModalView.openOnTab(CustomCanvasModalView.Tab.KEYBIND_CREATOR, selectedBtn)
             }
             onExitHudEditor = {
-                if (!jvmStarted) {
+                if (!jvmRunningInProcess) {
                     visibility = View.GONE
                     mainMenuView.visibility = View.VISIBLE
                     mainMenuView.showBannerMessage("Tata letak HUD disimpan.")
@@ -135,7 +146,7 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
         // 5. Physical Gamepad & External Keyboard Router
         gamepadRouter = GamepadInputRouter(proHudOverlay)
 
-        // 6. Clean Matte Non-Neon 6-Page Studio Launcher Console
+        // 6. Clean Matte Non-Neon 6-Page Studio Launcher Console with Vector Icons
         mainMenuView = MainMenuView(this).apply {
             onStartOrResumeDownload = { skipMusicLite ->
                 requestPostNotificationsPermissionIfNeeded()
@@ -162,6 +173,9 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
             }
             onOpenRendererAndKeybindModal = {
                 customModalView.openOnTab(CustomCanvasModalView.Tab.KEYBIND_CREATOR)
+            }
+            onControlJsonReloadRequested = {
+                proHudOverlay.reloadLayoutFromDisk()
             }
         }
 
@@ -219,7 +233,57 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
             )
         )
 
+        // Attach Android System IME Keyboard Bridge View to Root Container
+        SystemImeHelper.attachToRoot(this, rootContainer)
+
         setContentView(rootContainer)
+
+        // If JVM is already running in this process (e.g. Activity resumed/recreated after app switch),
+        // immediately restore the in-game view without relogging!
+        val nativeTelemetry = NativeEngineBridge.getBootTelemetry()
+        if (jvmRunningInProcess || (nativeTelemetry.stage >= 3 && !nativeTelemetry.jvmExited)) {
+            jvmRunningInProcess = true
+            mainMenuView.visibility = View.GONE
+            proHudOverlay.visibility = View.VISIBLE
+            if (nativeTelemetry.stage < 10) {
+                bootLogOverlay.startBootMonitoring()
+            } else {
+                bootLogOverlay.visibility = View.GONE
+            }
+            VeloLogger.section("BOOT", "Resumed existing active JVM session without relog (stage=${nativeTelemetry.stage}).")
+        }
+
+        // Prevent Android Back Gesture / Button from finishing GameActivity while in-game
+        onBackPressedDispatcher.addCallback(
+            this,
+            object : OnBackPressedCallback(true) {
+                override fun handleOnBackPressed() {
+                    when {
+                        SystemImeHelper.isImeActive() -> {
+                            SystemImeHelper.hideKeyboard(this@GameActivity)
+                        }
+                        customModalView.visibility == View.VISIBLE -> {
+                            customModalView.visibility = View.GONE
+                        }
+                        proHudOverlay.isVisualEditMode -> {
+                            proHudOverlay.exitVisualEditMode(save = true)
+                        }
+                        proHudOverlay.isSidebarDrawerOpen -> {
+                            proHudOverlay.isSidebarDrawerOpen = false
+                            proHudOverlay.postInvalidateOnAnimation()
+                        }
+                        jvmRunningInProcess -> {
+                            // Send ESC key to Minecraft (Pause Menu / Close Inventory) instead of killing Activity
+                            NativeEngineBridge.sendKeyEvent(NativeEngineBridge.KEY_ESCAPE, true)
+                            NativeEngineBridge.sendKeyEvent(NativeEngineBridge.KEY_ESCAPE, false)
+                        }
+                        else -> {
+                            moveTaskToBack(true)
+                        }
+                    }
+                }
+            }
+        )
 
         window.decorView.post {
             enableImmersiveHighRefreshDisplaySafely()
@@ -242,7 +306,21 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
         fabricStateBridge.startListening()
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        // Ensure bringing the app back from Recents or Launcher icon never resets to mainMenuView when JVM is running
+        if (jvmRunningInProcess) {
+            mainMenuView.visibility = View.GONE
+            proHudOverlay.visibility = View.VISIBLE
+            proHudOverlay.postInvalidateOnAnimation()
+        }
+    }
+
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (SystemImeHelper.isImeActive()) {
+            return super.dispatchKeyEvent(event)
+        }
         if (gamepadRouter.onKeyEvent(event)) {
             return true
         }
@@ -272,9 +350,15 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
     override fun surfaceCreated(holder: SurfaceHolder) {
         val frame = holder.surfaceFrame
-        VeloLogger.section("RENDERER", "SurfaceView surfaceCreated (${frame.width()}x${frame.height()}).")
+        VeloLogger.section("RENDERER", "SurfaceView surfaceCreated (${frame.width()}x${frame.height()}), jvmRunning=$jvmRunningInProcess.")
         NativeEngineBridge.setSurface(holder.surface, frame.width(), frame.height())
-        mainMenuView.refreshState()
+        if (!jvmRunningInProcess) {
+            mainMenuView.refreshState()
+        } else {
+            mainMenuView.visibility = View.GONE
+            proHudOverlay.visibility = View.VISIBLE
+            proHudOverlay.postInvalidateOnAnimation()
+        }
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
@@ -282,6 +366,9 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
+        // Detach ANativeWindow cleanly; native render thread automatically switches to preserved pbufferSurface
+        // so leaving the app briefly never crashes or relogs the game session!
+        VeloLogger.section("RENDERER", "SurfaceView surfaceDestroyed (preserving JVM & EGL context in background).")
         NativeEngineBridge.setSurface(null, 0, 0)
     }
 
@@ -298,10 +385,13 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
             return
         }
 
-        if (jvmStarted) {
+        if (jvmRunningInProcess) {
             mainMenuView.visibility = View.GONE
             proHudOverlay.visibility = View.VISIBLE
-            bootLogOverlay.startBootMonitoring()
+            val nativeTel = NativeEngineBridge.getBootTelemetry()
+            if (nativeTel.stage < 10) {
+                bootLogOverlay.startBootMonitoring()
+            }
             return
         }
 
@@ -325,14 +415,14 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
         val summaryLine =
             "RAM Heap: ${hw.allocatedHeapMb} MB | Renderer: ${effectiveRenderer.displayName} | Skala: $resScale% | ABI: ${hw.abi}"
 
-        jvmStarted = true
+        jvmRunningInProcess = true
         runOnUiThread {
             mainMenuView.visibility = View.GONE
             proHudOverlay.visibility = View.VISIBLE
             proHudOverlay.activeRendererLabel = effectiveRenderer.id.uppercase()
             bootLogOverlay.startBootMonitoring()
             bootLogOverlay.updateBootStage(
-                title = "TAHAP 1/10: Menyiapkan Direktori Game, Mod Stack & Shaderpack...",
+                title = "TAHAP 1/10: Menyiapkan Direktori Game, Mod Stack & Kompatibilitas Renderer...",
                 progress = 8,
                 summary = summaryLine
             )
@@ -368,29 +458,31 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 val jarCount = classpath.split(File.pathSeparator).count { it.isNotBlank() }
                 VeloLogger.section("STAGE-2", "Berhasil merakit Classpath dengan $jarCount pustaka JAR.")
 
-                val session = PlayerSessionManager(this@GameActivity).getActiveSession()
+                val activeAccount = AccountManager.getActiveAccount(this@GameActivity)
+                PlayerSessionManager(this@GameActivity).saveOfflineSession(activeAccount.username)
                 val jvmArgs = JvmOptimizer.buildDirectBootJvmArgs(
                     context = this@GameActivity,
                     gameDir = provisioner.gameDir,
                     assetsDir = provisioner.assetsDir,
                     nativesDir = provisioner.nativesDir,
                     classpath = classpath,
-                    playerUsername = session.username,
-                    playerUuid = session.uuid,
-                    accessToken = session.accessToken
+                    playerUsername = activeAccount.username,
+                    playerUuid = activeAccount.uuid,
+                    accessToken = activeAccount.accessToken,
+                    userType = activeAccount.userType
                 )
 
                 VeloLogger.section(
                     "STAGE-2",
-                    "Memulai peluncuran langsung OpenJDK 17 HotSpot untuk '${session.username}' (${jvmArgs.size} argumen, Renderer=${effectiveRenderer.id})"
+                    "Memulai peluncuran langsung OpenJDK 17 HotSpot untuk '${activeAccount.username}' (Tipe=${activeAccount.type.label}, ${jvmArgs.size} argumen, Renderer=${effectiveRenderer.id})"
                 )
 
                 val exitCode = NativeEngineBridge.launchDirectJvm(jliLib.absolutePath, jvmArgs)
                 VeloLogger.section("RUNTIME", "JVM selesai dengan kode keluar: $exitCode")
-                jvmStarted = false
+                jvmRunningInProcess = false
                 bootLogOverlay.notifyJvmFinished(exitCode)
             } catch (t: Throwable) {
-                jvmStarted = false
+                jvmRunningInProcess = false
                 VeloLogger.error("Error in VeloCraft-JVM-Main thread", t)
                 bootLogOverlay.notifyJvmFinished(-99)
             }
@@ -454,8 +546,17 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
     override fun onResume() {
         super.onResume()
         EngineDownloadService.addListener(downloadListener)
-        mainMenuView.refreshState()
+        if (!jvmRunningInProcess) {
+            mainMenuView.refreshState()
+        } else {
+            mainMenuView.visibility = View.GONE
+            proHudOverlay.visibility = View.VISIBLE
+            proHudOverlay.postInvalidateOnAnimation()
+        }
         gyroController.start()
+        window.decorView.post {
+            enableImmersiveHighRefreshDisplaySafely()
+        }
     }
 
     override fun onPause() {

@@ -1,7 +1,11 @@
 package io.velocraft.android.controls
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import io.velocraft.android.bridge.NativeEngineBridge
+import io.velocraft.android.util.VeloLogger
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -49,13 +53,18 @@ enum class ActionType {
     MACRO_HITBOXES,
     MACRO_CHUNK_BORDERS,
     MACRO_RELOAD_CHUNKS,
-    TOGGLE_HUD_CLEAN
+    TOGGLE_HUD_CLEAN,
+    IME_KEYBOARD_TOGGLE,
+    SIDEBAR_DRAWER_TOGGLE
 }
 
 object ControlProfileManager {
 
     private const val PROFILE_FILENAME = "velocraft_pvp_hud_clean_v3.json"
     private const val LEGACY_PROFILE_FILENAME = "velocraft_pvp_hud_clean_v2.json"
+
+    @Volatile
+    var lastShareStatusMessage: String = "Siap ekspor / bagikan / impor profil kontrol (.json)"
 
     val STUDIO_ACCENT_PALETTE: List<Pair<String, Int>> = listOf(
         "HIJAU STUDIO" to 0xFF4E8C57.toInt(),
@@ -87,16 +96,17 @@ object ControlProfileManager {
         HudButtonConfig("btn_drop", "DROP (Q)", 0.74f, 0.47f, 22f, 0.76f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_Q, accentHex = 0xFF78736A.toInt(), shape = ButtonShape.CIRCLE),
         HudButtonConfig("btn_pick", "PICK (M)", 0.83f, 0.41f, 21f, 0.76f, ActionType.MOUSE_MIDDLE_PICK, NativeEngineBridge.MOUSE_MIDDLE, accentHex = 0xFF5A7D9A.toInt(), shape = ButtonShape.CIRCLE),
 
-        // Top Utility Bar (CFG, ESC, F3, CAM, CHAT, CURSOR, GYRO, INV, EDIT HUD)
-        HudButtonConfig("btn_settings", "CFG", 0.06f, 0.12f, 19f, 0.84f, ActionType.QUICK_SETTINGS, accentHex = 0xFF78736A.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("btn_esc", "ESC", 0.13f, 0.12f, 19f, 0.82f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_ESCAPE, accentHex = 0xFFC87D55.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("btn_f3", "F3", 0.20f, 0.12f, 18f, 0.78f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_F3, accentHex = 0xFF78736A.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("btn_f5", "CAM", 0.27f, 0.12f, 19f, 0.78f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_F5, accentHex = 0xFF78736A.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("btn_chat", "CHAT", 0.34f, 0.12f, 19f, 0.78f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_T, accentHex = 0xFF78736A.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("btn_cursor", "KURSOR", 0.67f, 0.12f, 20f, 0.84f, ActionType.CURSOR_TOGGLE, isToggle = true, accentHex = 0xFF5A7D9A.toInt(), shape = ButtonShape.PILL),
-        HudButtonConfig("btn_gyro", "GYRO", 0.76f, 0.12f, 19f, 0.80f, ActionType.GYRO_TOGGLE, isToggle = true, accentHex = 0xFF4E8C57.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("btn_inv", "INV (E)", 0.84f, 0.12f, 21f, 0.84f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_E, accentHex = 0xFFB89248.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("btn_edit_hud", "EDIT HUD", 0.93f, 0.12f, 21f, 0.86f, ActionType.HUD_EDITOR_TOGGLE, isToggle = true, accentHex = 0xFFC87D55.toInt(), shape = ButtonShape.PILL)
+        // Top Utility Bar (MENU, ESC, F3, CAM, KEYB, KURSOR, GYRO, INV, EDIT HUD)
+        HudButtonConfig("btn_settings", "MENU", 0.06f, 0.13f, 19f, 0.84f, ActionType.SIDEBAR_DRAWER_TOGGLE, accentHex = 0xFF4E8C57.toInt(), shape = ButtonShape.ROUND_RECT),
+        HudButtonConfig("btn_esc", "ESC", 0.13f, 0.13f, 19f, 0.82f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_ESCAPE, accentHex = 0xFFC87D55.toInt(), shape = ButtonShape.ROUND_RECT),
+        HudButtonConfig("btn_f3", "F3", 0.20f, 0.13f, 18f, 0.78f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_F3, accentHex = 0xFF78736A.toInt(), shape = ButtonShape.ROUND_RECT),
+        HudButtonConfig("btn_f5", "CAM", 0.27f, 0.13f, 19f, 0.78f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_F5, accentHex = 0xFF78736A.toInt(), shape = ButtonShape.ROUND_RECT),
+        HudButtonConfig("btn_chat", "CHAT", 0.34f, 0.13f, 19f, 0.78f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_T, accentHex = 0xFF78736A.toInt(), shape = ButtonShape.ROUND_RECT),
+        HudButtonConfig("btn_ime", "KEYB", 0.41f, 0.13f, 19f, 0.82f, ActionType.IME_KEYBOARD_TOGGLE, accentHex = 0xFF5A7D9A.toInt(), shape = ButtonShape.ROUND_RECT),
+        HudButtonConfig("btn_cursor", "KURSOR", 0.67f, 0.13f, 20f, 0.84f, ActionType.CURSOR_TOGGLE, isToggle = true, accentHex = 0xFF5A7D9A.toInt(), shape = ButtonShape.PILL),
+        HudButtonConfig("btn_gyro", "GYRO", 0.76f, 0.13f, 19f, 0.80f, ActionType.GYRO_TOGGLE, isToggle = true, accentHex = 0xFF4E8C57.toInt(), shape = ButtonShape.ROUND_RECT),
+        HudButtonConfig("btn_inv", "INV (E)", 0.84f, 0.13f, 21f, 0.84f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_E, accentHex = 0xFFB89248.toInt(), shape = ButtonShape.ROUND_RECT),
+        HudButtonConfig("btn_edit_hud", "EDIT HUD", 0.93f, 0.13f, 21f, 0.86f, ActionType.HUD_EDITOR_TOGGLE, isToggle = true, accentHex = 0xFFC87D55.toInt(), shape = ButtonShape.PILL)
     )
 
     /**
@@ -118,12 +128,13 @@ object ControlProfileManager {
         HudButtonConfig("btn_f5", "CAM F5", 0.70f, 0.42f, 24f, 0.84f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_F5, accentHex = 0xFF5A7D9A.toInt(), shape = ButtonShape.ROUND_RECT),
         HudButtonConfig("btn_hitbox", "HITBOX", 0.81f, 0.38f, 21f, 0.80f, ActionType.MACRO_HITBOXES, accentHex = 0xFFB89248.toInt(), shape = ButtonShape.PILL),
 
-        HudButtonConfig("btn_settings", "CFG", 0.06f, 0.12f, 19f, 0.82f, ActionType.QUICK_SETTINGS, accentHex = 0xFF78736A.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("btn_esc", "ESC", 0.13f, 0.12f, 19f, 0.82f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_ESCAPE, accentHex = 0xFFC87D55.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("btn_cursor", "KURSOR", 0.67f, 0.12f, 20f, 0.84f, ActionType.CURSOR_TOGGLE, isToggle = true, accentHex = 0xFF5A7D9A.toInt(), shape = ButtonShape.PILL),
-        HudButtonConfig("btn_gyro", "GYRO", 0.76f, 0.12f, 19f, 0.82f, ActionType.GYRO_TOGGLE, isToggle = true, accentHex = 0xFF4E8C57.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("btn_inv", "INV (E)", 0.84f, 0.12f, 21f, 0.84f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_E, accentHex = 0xFFB89248.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("btn_edit_hud", "EDIT HUD", 0.93f, 0.12f, 21f, 0.86f, ActionType.HUD_EDITOR_TOGGLE, isToggle = true, accentHex = 0xFFC87D55.toInt(), shape = ButtonShape.PILL)
+        HudButtonConfig("btn_settings", "MENU", 0.06f, 0.13f, 19f, 0.82f, ActionType.SIDEBAR_DRAWER_TOGGLE, accentHex = 0xFF4E8C57.toInt(), shape = ButtonShape.ROUND_RECT),
+        HudButtonConfig("btn_esc", "ESC", 0.13f, 0.13f, 19f, 0.82f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_ESCAPE, accentHex = 0xFFC87D55.toInt(), shape = ButtonShape.ROUND_RECT),
+        HudButtonConfig("btn_ime", "KEYB", 0.20f, 0.13f, 19f, 0.82f, ActionType.IME_KEYBOARD_TOGGLE, accentHex = 0xFF5A7D9A.toInt(), shape = ButtonShape.ROUND_RECT),
+        HudButtonConfig("btn_cursor", "KURSOR", 0.67f, 0.13f, 20f, 0.84f, ActionType.CURSOR_TOGGLE, isToggle = true, accentHex = 0xFF5A7D9A.toInt(), shape = ButtonShape.PILL),
+        HudButtonConfig("btn_gyro", "GYRO", 0.76f, 0.13f, 19f, 0.82f, ActionType.GYRO_TOGGLE, isToggle = true, accentHex = 0xFF4E8C57.toInt(), shape = ButtonShape.ROUND_RECT),
+        HudButtonConfig("btn_inv", "INV (E)", 0.84f, 0.13f, 21f, 0.84f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_E, accentHex = 0xFFB89248.toInt(), shape = ButtonShape.ROUND_RECT),
+        HudButtonConfig("btn_edit_hud", "EDIT HUD", 0.93f, 0.13f, 21f, 0.86f, ActionType.HUD_EDITOR_TOGGLE, isToggle = true, accentHex = 0xFFC87D55.toInt(), shape = ButtonShape.PILL)
     ).apply {
         forEach { if (it.id == "move_s") it.accentHex = 0xFF78736A.toInt() }
     }
@@ -146,20 +157,36 @@ object ControlProfileManager {
         HudButtonConfig("btn_scroll_up", "SCRL -", 0.73f, 0.52f, 20f, 0.65f, ActionType.MOUSE_SCROLL_UP, accentHex = 0xFF78736A.toInt(), shape = ButtonShape.ROUND_RECT),
         HudButtonConfig("btn_scroll_dn", "SCRL +", 0.73f, 0.66f, 20f, 0.65f, ActionType.MOUSE_SCROLL_DOWN, accentHex = 0xFF78736A.toInt(), shape = ButtonShape.ROUND_RECT),
 
-        HudButtonConfig("btn_settings", "CFG", 0.06f, 0.12f, 18f, 0.72f, ActionType.QUICK_SETTINGS, accentHex = 0xFF78736A.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("btn_esc", "ESC", 0.13f, 0.12f, 18f, 0.72f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_ESCAPE, accentHex = 0xFFC87D55.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("btn_cursor", "KURSOR", 0.73f, 0.12f, 19f, 0.75f, ActionType.CURSOR_TOGGLE, isToggle = true, accentHex = 0xFF5A7D9A.toInt(), shape = ButtonShape.PILL),
-        HudButtonConfig("btn_inv", "INV (E)", 0.83f, 0.12f, 20f, 0.75f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_E, accentHex = 0xFFB89248.toInt(), shape = ButtonShape.ROUND_RECT),
-        HudButtonConfig("btn_edit_hud", "EDIT HUD", 0.93f, 0.12f, 20f, 0.78f, ActionType.HUD_EDITOR_TOGGLE, isToggle = true, accentHex = 0xFFC87D55.toInt(), shape = ButtonShape.PILL)
+        HudButtonConfig("btn_settings", "MENU", 0.06f, 0.13f, 18f, 0.72f, ActionType.SIDEBAR_DRAWER_TOGGLE, accentHex = 0xFF4E8C57.toInt(), shape = ButtonShape.ROUND_RECT),
+        HudButtonConfig("btn_esc", "ESC", 0.13f, 0.13f, 18f, 0.72f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_ESCAPE, accentHex = 0xFFC87D55.toInt(), shape = ButtonShape.ROUND_RECT),
+        HudButtonConfig("btn_ime", "KEYB", 0.20f, 0.13f, 18f, 0.75f, ActionType.IME_KEYBOARD_TOGGLE, accentHex = 0xFF5A7D9A.toInt(), shape = ButtonShape.ROUND_RECT),
+        HudButtonConfig("btn_cursor", "KURSOR", 0.73f, 0.13f, 19f, 0.75f, ActionType.CURSOR_TOGGLE, isToggle = true, accentHex = 0xFF5A7D9A.toInt(), shape = ButtonShape.PILL),
+        HudButtonConfig("btn_inv", "INV (E)", 0.83f, 0.13f, 20f, 0.75f, ActionType.KEY_HOLD, NativeEngineBridge.KEY_E, accentHex = 0xFFB89248.toInt(), shape = ButtonShape.ROUND_RECT),
+        HudButtonConfig("btn_edit_hud", "EDIT HUD", 0.93f, 0.13f, 20f, 0.78f, ActionType.HUD_EDITOR_TOGGLE, isToggle = true, accentHex = 0xFFC87D55.toInt(), shape = ButtonShape.PILL)
     )
+
+    fun getExternalControlsDir(context: Context): File {
+        val base = VeloLogger.logDir?.parentFile ?: context.filesDir
+        return File(base, "controls").apply { mkdirs() }
+    }
 
     fun loadLayout(context: Context): MutableList<HudButtonConfig> {
         val file = File(context.filesDir, PROFILE_FILENAME)
         val sourceFile = if (file.exists()) file else File(context.filesDir, LEGACY_PROFILE_FILENAME)
         if (!sourceFile.exists()) return createDefaultProPvpLayout()
 
+        val parsed = parseLayoutFromJson(sourceFile.readText())
+        return if (parsed != null && parsed.isNotEmpty()) parsed else createDefaultProPvpLayout()
+    }
+
+    fun parseLayoutFromJson(rawJson: String): MutableList<HudButtonConfig>? {
         return try {
-            val arr = JSONArray(sourceFile.readText())
+            val trimmed = rawJson.trim()
+            val arr = if (trimmed.startsWith("{")) {
+                JSONObject(trimmed).optJSONArray("buttons") ?: return null
+            } else {
+                JSONArray(trimmed)
+            }
             val list = mutableListOf<HudButtonConfig>()
             for (i in 0 until arr.length()) {
                 val obj = arr.getJSONObject(i)
@@ -177,11 +204,11 @@ object ControlProfileManager {
                 }
                 list.add(
                     HudButtonConfig(
-                        id = obj.getString("id"),
-                        label = obj.getString("label"),
-                        normX = obj.getDouble("normX").toFloat().coerceIn(0.03f, 0.97f),
-                        normY = obj.getDouble("normY").toFloat().coerceIn(0.05f, 0.95f),
-                        radiusDp = obj.getDouble("radiusDp").toFloat().coerceIn(14f, 64f),
+                        id = obj.optString("id", "btn_$i"),
+                        label = obj.optString("label", "BTN"),
+                        normX = obj.optDouble("normX", 0.5).toFloat().coerceIn(0.03f, 0.97f),
+                        normY = obj.optDouble("normY", 0.5).toFloat().coerceIn(0.05f, 0.95f),
+                        radiusDp = obj.optDouble("radiusDp", 24.0).toFloat().coerceIn(14f, 64f),
                         opacity = obj.optDouble("opacity", 0.80).toFloat().coerceIn(0.15f, 1.0f),
                         actionType = parsedAction,
                         keyCodeOrButton = obj.optInt("keyCodeOrButton", 0),
@@ -192,13 +219,13 @@ object ControlProfileManager {
                     )
                 )
             }
-            if (list.isEmpty()) createDefaultProPvpLayout() else list
+            if (list.isEmpty()) null else list
         } catch (_: Exception) {
-            createDefaultProPvpLayout()
+            null
         }
     }
 
-    fun saveLayout(context: Context, buttons: List<HudButtonConfig>) {
+    fun serializeLayoutToJson(buttons: List<HudButtonConfig>, profileName: String = "XyverseProHUD"): String {
         val arr = JSONArray()
         for (b in buttons) {
             arr.put(JSONObject().apply {
@@ -216,6 +243,118 @@ object ControlProfileManager {
                 put("isVisible", b.isVisible)
             })
         }
-        File(context.filesDir, PROFILE_FILENAME).writeText(arr.toString(2))
+        val wrapper = JSONObject().apply {
+            put("schema", "id.xyverse.minecraft.controls.v3")
+            put("profileName", profileName)
+            put("exportedAtMs", System.currentTimeMillis())
+            put("buttonCount", buttons.size)
+            put("buttons", arr)
+        }
+        return wrapper.toString(2)
+    }
+
+    fun saveLayout(context: Context, buttons: List<HudButtonConfig>) {
+        val jsonStr = serializeLayoutToJson(buttons, "ActiveProfile")
+        File(context.filesDir, PROFILE_FILENAME).writeText(jsonStr)
+    }
+
+    /**
+     * Exports the current control profile `.json` to `Android/media/id.xyverse.minecraft/controls/`,
+     * copies the JSON to the Android Clipboard, and optionally opens the Android Share Sheet (`ACTION_SEND`).
+     */
+    fun exportAndShareLayoutJson(
+        context: Context,
+        buttons: List<HudButtonConfig>,
+        profileName: String = "kontrol-custom",
+        openShareSheet: Boolean = true
+    ): String {
+        val safeName = profileName
+            .replace(Regex("[^a-zA-Z0-9_-]"), "-")
+            .trim('-')
+            .ifEmpty { "kontrol-custom" }
+        val fileName = if (safeName.endsWith(".json", ignoreCase = true)) safeName else "$safeName.json"
+
+        val jsonText = serializeLayoutToJson(buttons, safeName)
+        val outDir = getExternalControlsDir(context)
+        val outFile = File(outDir, fileName)
+        outFile.writeText(jsonText)
+
+        try {
+            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+            cm?.setPrimaryClip(ClipData.newPlainText("Minecraft Control JSON ($fileName)", jsonText))
+        } catch (_: Exception) {
+        }
+
+        if (openShareSheet) {
+            try {
+                val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                    type = "application/json"
+                    putExtra(Intent.EXTRA_TITLE, "Profil Kontrol Minecraft ($fileName)")
+                    putExtra(Intent.EXTRA_SUBJECT, fileName)
+                    putExtra(Intent.EXTRA_TEXT, jsonText)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                val chooser = Intent.createChooser(shareIntent, "Bagikan Profil Kontrol JSON").apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(chooser)
+            } catch (_: Exception) {
+            }
+        }
+
+        lastShareStatusMessage = "Diekspor & disalin: ${outFile.absolutePath}"
+        VeloLogger.section("CONTROLS", "Exported control profile JSON (${buttons.size} buttons) -> ${outFile.absolutePath}")
+        return outFile.absolutePath
+    }
+
+    fun importLayoutFromClipboard(context: Context): Pair<Boolean, String> {
+        return try {
+            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+            val clipText = cm?.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString() ?: ""
+            if (clipText.isBlank()) {
+                val msg = "Clipboard kosong. Salin teks .json kontrol terlebih dahulu."
+                lastShareStatusMessage = msg
+                return false to msg
+            }
+            val parsed = parseLayoutFromJson(clipText)
+            if (parsed == null || parsed.isEmpty()) {
+                val msg = "Isi Clipboard bukan format .json kontrol yang valid."
+                lastShareStatusMessage = msg
+                return false to msg
+            }
+            saveLayout(context, parsed)
+            val msg = "Berhasil mengimpor ${parsed.size} tombol kontrol dari Clipboard!"
+            lastShareStatusMessage = msg
+            VeloLogger.section("CONTROLS", msg)
+            true to msg
+        } catch (t: Throwable) {
+            val msg = "Gagal impor dari Clipboard: ${t.message?.take(45)}"
+            lastShareStatusMessage = msg
+            false to msg
+        }
+    }
+
+    fun listSavedExternalJsonProfiles(context: Context): List<File> {
+        val dir = getExternalControlsDir(context)
+        val files = dir.listFiles { f -> f.isFile && f.extension.equals("json", ignoreCase = true) }
+            ?: return emptyList()
+        return files.sortedByDescending { it.lastModified() }
+    }
+
+    fun importLayoutFromFile(context: Context, file: File): Pair<Boolean, String> {
+        return try {
+            if (!file.exists()) return false to "File tidak ditemukan: ${file.name}"
+            val parsed = parseLayoutFromJson(file.readText())
+                ?: return false to "Format JSON tidak valid di ${file.name}"
+            saveLayout(context, parsed)
+            val msg = "Berhasil memuat profil '${file.name}' (${parsed.size} tombol)!"
+            lastShareStatusMessage = msg
+            VeloLogger.section("CONTROLS", msg)
+            true to msg
+        } catch (t: Throwable) {
+            val msg = "Gagal memuat ${file.name}: ${t.message}"
+            lastShareStatusMessage = msg
+            false to msg
+        }
     }
 }

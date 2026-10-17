@@ -109,9 +109,12 @@ struct SharedEngineState {
 
     EGLDisplay eglDisplay = EGL_NO_DISPLAY;
     EGLSurface eglSurface = EGL_NO_SURFACE;
+    EGLSurface pbufferSurface = EGL_NO_SURFACE;
     EGLContext eglContext = EGL_NO_CONTEXT;
     EGLConfig  eglConfig  = nullptr;
     EGLint     eglFormat  = 0;
+    std::atomic<bool> isBackgrounded{false};
+    std::atomic<bool> surfaceNeedsRebind{false};
 
     // Real-time Boot Progress & Mojang Splash / Minecraft Title Screen ETA Telemetry
     pthread_mutex_t telemetryMutex = PTHREAD_MUTEX_INITIALIZER;
@@ -609,10 +612,43 @@ void JNICALL jvmExitHook(jint code) {
     pthread_exit(reinterpret_cast<void*>(static_cast<intptr_t>(code)));
 }
 
+void dumpNewestHsErrLogIfPresent() {
+    DIR* dir = opendir(".");
+    if (!dir) return;
+    std::string newestName;
+    time_t newestMtime = 0;
+    struct dirent* ent = nullptr;
+    while ((ent = readdir(dir)) != nullptr) {
+        std::string name = ent->d_name;
+        if (name.rfind("hs_err_pid", 0) == 0 && name.size() > 14) {
+            struct stat stBuf{};
+            if (stat(name.c_str(), &stBuf) == 0 && stBuf.st_mtime >= newestMtime) {
+                newestMtime = stBuf.st_mtime;
+                newestName = name;
+            }
+        }
+    }
+    closedir(dir);
+    if (newestName.empty()) return;
+
+    std::ifstream hsFile(newestName);
+    if (!hsFile.is_open()) return;
+    appendNativeLineToLogFile("HS-ERR", "=== Ringkasan " + newestName + " ===");
+    std::string line;
+    int lineCount = 0;
+    while (std::getline(hsFile, line) && lineCount < 85) {
+        if (!line.empty()) {
+            appendNativeLineToLogFile("HS-ERR", line);
+        }
+        lineCount++;
+    }
+}
+
 void JNICALL jvmAbortHook() {
     std::fflush(stdout);
     std::fflush(stderr);
     drainStdioPipeNonBlocking();
+    dumpNewestHsErrLogIfPresent();
     SharedEngineState* st = getSharedState();
     appendNativeLineToLogFile(
         "ABORT-HOOK",
@@ -984,9 +1020,8 @@ void* jvmHeartbeatMonitorThread(void* /*arg*/) {
     jmethodID maxMemMid   = runtimeCls ? env->GetMethodID(runtimeCls, "maxMemory", "()J")   : nullptr;
     env->ExceptionClear();
 
-    while (st->jvmRunning.load(std::memory_order_acquire) &&
-           !st->titleScreenReached.load(std::memory_order_relaxed)) {
-        usleep(1500 * 1000);
+    while (st->jvmRunning.load(std::memory_order_acquire)) {
+        usleep(1800 * 1000);
         if (!st->jvmRunning.load(std::memory_order_acquire)) break;
 
         if (runtimeObj && totalMemMid && freeMemMid && maxMemMid) {
@@ -1001,9 +1036,11 @@ void* jvmHeartbeatMonitorThread(void* /*arg*/) {
             st->jvmMaxRamMb.store(maxMb, std::memory_order_relaxed);
         }
 
-        int32_t classes = st->loadedClassCount.load(std::memory_order_relaxed);
-        recalculateEtaAndProgress(st, classes);
-        emitBootProgressLogLine(st, false);
+        if (!st->titleScreenReached.load(std::memory_order_relaxed)) {
+            int32_t classes = st->loadedClassCount.load(std::memory_order_relaxed);
+            recalculateEtaAndProgress(st, classes);
+            emitBootProgressLogLine(st, false);
+        }
     }
 
     vm->DetachCurrentThread();
@@ -1347,8 +1384,53 @@ void pojavMakeCurrent(void* window) {
 __attribute__((visibility("default"), used))
 void pojavSwapBuffers() {
     SharedEngineState* st = getSharedState();
-    if (st->eglDisplay != EGL_NO_DISPLAY && st->eglSurface != EGL_NO_SURFACE) {
-        eglSwapBuffers(st->eglDisplay, st->eglSurface);
+    if (st->eglDisplay == EGL_NO_DISPLAY || st->eglContext == EGL_NO_CONTEXT) {
+        return;
+    }
+
+    // Handle seamless background/foreground ANativeWindow swap without restarting JVM or losing GL state
+    if (st->surfaceNeedsRebind.exchange(false, std::memory_order_acq_rel)) {
+        if (st->pbufferSurface == EGL_NO_SURFACE) {
+            const EGLint pbufAttribs[] = {EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE};
+            st->pbufferSurface = eglCreatePbufferSurface(st->eglDisplay, st->eglConfig, pbufAttribs);
+        }
+        eglMakeCurrent(st->eglDisplay, st->pbufferSurface, st->pbufferSurface, st->eglContext);
+        if (st->eglSurface != EGL_NO_SURFACE && st->eglSurface != st->pbufferSurface) {
+            eglDestroySurface(st->eglDisplay, st->eglSurface);
+        }
+        st->eglSurface = st->pbufferSurface;
+
+        ANativeWindow* win = st->nativeWindow.load(std::memory_order_acquire);
+        if (win != nullptr && !st->isBackgrounded.load(std::memory_order_acquire)) {
+            int w = st->surfaceWidth.load(std::memory_order_relaxed);
+            int h = st->surfaceHeight.load(std::memory_order_relaxed);
+            ANativeWindow_setBuffersGeometry(win, w, h, st->eglFormat);
+            EGLSurface newWinSurf = eglCreateWindowSurface(st->eglDisplay, st->eglConfig, win, nullptr);
+            if (newWinSurf != EGL_NO_SURFACE) {
+                if (eglMakeCurrent(st->eglDisplay, newWinSurf, newWinSurf, st->eglContext) == EGL_TRUE) {
+                    st->eglSurface = newWinSurf;
+                    st->windowSizeSyncCounter.store(0, std::memory_order_relaxed);
+                    appendNativeLineToLogFile("EGL", "EGLSurface berhasil diikat ulang ke jendela aktif (Zero-Relog).");
+                } else {
+                    eglDestroySurface(st->eglDisplay, newWinSurf);
+                }
+            }
+        }
+    }
+
+    if (st->isBackgrounded.load(std::memory_order_relaxed) || st->eglSurface == st->pbufferSurface) {
+        usleep(25000);
+        return;
+    }
+
+    if (st->eglSurface != EGL_NO_SURFACE) {
+        if (eglSwapBuffers(st->eglDisplay, st->eglSurface) != EGL_TRUE) {
+            EGLint err = eglGetError();
+            if (err == EGL_BAD_SURFACE || err == EGL_BAD_NATIVE_WINDOW) {
+                st->surfaceNeedsRebind.store(true, std::memory_order_release);
+            }
+            return;
+        }
         int32_t frameNum = st->swapBuffersCount.fetch_add(1, std::memory_order_relaxed) + 1;
         if (frameNum == 1) {
             st->mojangSplashReached.store(true, std::memory_order_relaxed);
@@ -1503,6 +1585,17 @@ void pojavPumpEvents(void* window) {
                 auto cbScroll = st->cbScroll.load(std::memory_order_acquire);
                 if (cbScroll) {
                     cbScroll(targetWin, static_cast<double>(ev.x), static_cast<double>(ev.y));
+                }
+                break;
+            }
+            case EventType::CHAR_EVENT: {
+                auto cbChar = st->cbChar.load(std::memory_order_acquire);
+                if (cbChar && ev.code > 0) {
+                    cbChar(targetWin, static_cast<unsigned int>(ev.code));
+                }
+                auto cbCharMods = st->cbCharMods.load(std::memory_order_acquire);
+                if (cbCharMods && ev.code > 0) {
+                    cbCharMods(targetWin, static_cast<unsigned int>(ev.code), ev.mods);
                 }
                 break;
             }
@@ -1690,13 +1783,23 @@ Java_io_velocraft_android_bridge_NativeEngineBridge_nativeSetSurface(
 
     if (surface != nullptr) {
         ANativeWindow* newWindow = ANativeWindow_fromSurface(env, surface);
+        if (width > 0 && height > 0) {
+            st->surfaceWidth.store(width, std::memory_order_relaxed);
+            st->surfaceHeight.store(height, std::memory_order_relaxed);
+        }
         st->nativeWindow.store(newWindow, std::memory_order_release);
-        st->surfaceWidth.store(width, std::memory_order_relaxed);
-        st->surfaceHeight.store(height, std::memory_order_relaxed);
+        st->isBackgrounded.store(false, std::memory_order_release);
+        st->surfaceNeedsRebind.store(true, std::memory_order_release);
         st->windowSizeSyncCounter.store(0, std::memory_order_relaxed);
-        st->cursorX.store(width * 0.5, std::memory_order_relaxed);
-        st->cursorY.store(height * 0.5, std::memory_order_relaxed);
+        if (st->swapBuffersCount.load(std::memory_order_relaxed) == 0 && width > 0 && height > 0) {
+            st->cursorX.store(width * 0.5, std::memory_order_relaxed);
+            st->cursorY.store(height * 0.5, std::memory_order_relaxed);
+        }
         LOGI("Bound ANativeWindow (%dx%d) for Direct OpenGL ES / Vulkan rendering", width, height);
+    } else {
+        st->isBackgrounded.store(true, std::memory_order_release);
+        st->surfaceNeedsRebind.store(true, std::memory_order_release);
+        LOGI("Surface paused to background — preserving OpenGL context on 1x1 Pbuffer");
     }
 }
 
@@ -1708,6 +1811,18 @@ Java_io_velocraft_android_bridge_NativeEngineBridge_nativeSendKey(
     ev.type = EventType::KEY_EVENT;
     ev.code = glfwKeyCode;
     ev.action = action;
+    ev.mods = mods;
+    getSharedState()->inputQueue.push(ev);
+}
+
+JNIEXPORT void JNICALL
+Java_io_velocraft_android_bridge_NativeEngineBridge_nativeSendChar(
+    JNIEnv* /*env*/, jobject /*thiz*/, jint codepoint, jint mods
+) {
+    InputEvent ev{};
+    ev.type = EventType::CHAR_EVENT;
+    ev.code = codepoint;
+    ev.action = GLFW_PRESS;
     ev.mods = mods;
     getSharedState()->inputQueue.push(ev);
 }
@@ -2136,6 +2251,7 @@ Java_io_velocraft_android_bridge_NativeEngineBridge_nativeLaunchDirectJvm(
     std::fflush(stdout);
     std::fflush(stderr);
     drainStdioPipeNonBlocking();
+    dumpNewestHsErrLogIfPresent();
 
     int rawCode = st->interceptedExitCode.load(std::memory_order_acquire);
     int exitCode = (rawCode == 1000) ? 0 : rawCode;

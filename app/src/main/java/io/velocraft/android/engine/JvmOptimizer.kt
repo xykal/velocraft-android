@@ -187,7 +187,8 @@ object JvmOptimizer {
         classpath: String,
         playerUsername: String,
         playerUuid: String,
-        accessToken: String = "0"
+        accessToken: String = "0",
+        userType: String = "msa"
     ): Array<String> {
         val hw = detectHardware(context)
         val initialHeapMb = (hw.allocatedHeapMb / 2).coerceAtLeast(384)
@@ -279,6 +280,7 @@ object JvmOptimizer {
                 "-Dglfwstub.initEgl=false",
                 "-Dmixin.debug.verify=false",
                 "-Dmixin.checks=false",
+                "-Dsodium.checks.issue2561=false",
                 "-Dlog4j2.formatMsgNoLookups=true",
                 "-Dfml.earlyprogresswindow=false",
                 "-Dloader.disable_forked_guis=true",
@@ -297,7 +299,7 @@ object JvmOptimizer {
                 "--assetIndex", "12",
                 "--uuid", playerUuid,
                 "--accessToken", accessToken,
-                "--userType", "msa",
+                "--userType", userType,
                 "--versionType", "release"
             )
         )

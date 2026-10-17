@@ -15,8 +15,10 @@ import android.view.MotionEvent
 import android.view.View
 import io.velocraft.android.auth.PlayerSessionManager
 import io.velocraft.android.bridge.NativeEngineBridge
+import io.velocraft.android.engine.AccountManager
 import io.velocraft.android.engine.JvmOptimizer
 import io.velocraft.android.engine.RendererProfileManager
+import io.velocraft.android.util.SystemImeHelper
 import io.velocraft.android.util.VeloLogger
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -208,7 +210,8 @@ class CustomCanvasModalView(
         SpecialBindingSpec("TOGGLE GYROSCOPE 200HZ", "GYRO", ActionType.GYRO_TOGGLE, 0, isToggle = true),
         SpecialBindingSpec("DAFTAR PEMAIN MULTIPLAYER (TAB)", "TAB LIST", ActionType.KEY_HOLD, NativeEngineBridge.KEY_TAB),
         SpecialBindingSpec("MENU PAUSE / MOD MENU (ESC)", "ESC", ActionType.KEY_HOLD, NativeEngineBridge.KEY_ESCAPE),
-        SpecialBindingSpec("BUKA CHAT / COMMAND (T)", "CHAT", ActionType.KEY_HOLD, NativeEngineBridge.KEY_T),
+        SpecialBindingSpec("BUKA KEYBOARD IME SISTEM", "KEYB", ActionType.IME_KEYBOARD_TOGGLE, 0),
+        SpecialBindingSpec("BUKA SIDEBAR MENU", "MENU", ActionType.SIDEBAR_DRAWER_TOGGLE, 0),
         SpecialBindingSpec("INVENTORI PEMAIN (E)", "INV (E)", ActionType.KEY_HOLD, NativeEngineBridge.KEY_E)
     )
 
@@ -396,41 +399,57 @@ class CustomCanvasModalView(
         canvas.drawRoundRect(gcModeToggleRect, dp(5f), dp(5f), borderPaint)
         drawCenteredButtonText(canvas, if (hw.useGenerationalZgc) "GC: ZGC" else "GC: G1GC", gcModeToggleRect)
 
-        var kY = rowY + rowH + dp(15f)
-        drawEllipsizedText(canvas, "3. Akun Pemain (Offline Username): $editingUsername", rightLeft, kY, rightW, titlePaint)
+        var kY = rowY + rowH + dp(14f)
+        val activeAcc = AccountManager.getActiveAccount(context)
+        drawEllipsizedText(
+            canvas,
+            "3. Akun Pemain (${activeAcc.type.label}): ${activeAcc.username}",
+            rightLeft,
+            kY,
+            rightW,
+            titlePaint
+        )
         kY += dp(6f)
 
         charKeyRects.clear()
-        val rows = listOf(
-            "1234567890_",
-            "QWERTYUIOP",
-            "ASDFGHJKL",
-            "ZXCVBNM"
-        )
-        val keyH = dp(23f)
-
-        for (row in rows) {
-            val keyW = (rightW - dp(3.5f) * (row.length - 1)) / row.length
-            for ((cIdx, ch) in row.withIndex()) {
-                val kx = rightLeft + cIdx * (keyW + dp(3.5f))
-                val r = RectF(kx, kY, kx + keyW, kY + keyH)
-                canvas.drawRoundRect(r, dp(5f), dp(5f), cardPaint)
-                canvas.drawRoundRect(r, dp(5f), dp(5f), borderPaint)
-                drawCenteredButtonText(canvas, ch.toString(), r)
-                charKeyRects.add(ch.toString() to r)
-            }
-            kY += keyH + dp(3.5f)
-        }
-
         val halfW = (rightW - dp(6f)) * 0.5f
-        val bkRect = RectF(rightLeft, kY, rightLeft + halfW, kY + dp(25f))
-        val saveUserRect = RectF(rightLeft + halfW + dp(6f), kY, right, kY + dp(25f))
-        canvas.drawRoundRect(bkRect, dp(6f), dp(6f), terraPaint)
-        canvas.drawRoundRect(saveUserRect, dp(6f), dp(6f), activeGreenPaint)
-        drawCenteredButtonText(canvas, "HAPUS [DEL]", bkRect)
-        drawCenteredButtonText(canvas, "SIMPAN USERNAME", saveUserRect)
-        charKeyRects.add("BACKSPACE" to bkRect)
-        charKeyRects.add("SAVE_USER" to saveUserRect)
+
+        // Row A: Mode Offline vs Mode Microsoft Resmi
+        val offlineModeRect = RectF(rightLeft, kY, rightLeft + halfW, kY + dp(28f))
+        val msaModeRect = RectF(rightLeft + halfW + dp(6f), kY, right, kY + dp(28f))
+        val isMsa = AccountManager.getSelectedMode(context) == AccountManager.AccountType.MICROSOFT
+        canvas.drawRoundRect(offlineModeRect, dp(6f), dp(6f), if (!isMsa) activeGreenPaint else cardPaint)
+        canvas.drawRoundRect(offlineModeRect, dp(6f), dp(6f), borderPaint)
+        drawCenteredButtonText(canvas, "MODE OFFLINE (LOKAL)", offlineModeRect)
+
+        canvas.drawRoundRect(msaModeRect, dp(6f), dp(6f), if (isMsa) activeGreenPaint else slateBluePaint)
+        canvas.drawRoundRect(msaModeRect, dp(6f), dp(6f), borderPaint)
+        drawCenteredButtonText(canvas, "LOGIN MICROSOFT (MSA)", msaModeRect)
+        charKeyRects.add("MODE_OFFLINE" to offlineModeRect)
+        charKeyRects.add("MODE_MICROSOFT" to msaModeRect)
+        kY += dp(33f)
+
+        // Row B: Tap to Edit Username with Native Android System IME Keyboard
+        val imeEditUserRect = RectF(rightLeft, kY, right, kY + dp(30f))
+        canvas.drawRoundRect(imeEditUserRect, dp(6f), dp(6f), cardPaint)
+        canvas.drawRoundRect(imeEditUserRect, dp(6f), dp(6f), borderPaint)
+        drawCenteredButtonText(canvas, "USERNAME: $editingUsername  [KETUK KEYBOARD IME SISTEM]", imeEditUserRect)
+        charKeyRects.add("OPEN_IME_USERNAME" to imeEditUserRect)
+        kY += dp(35f)
+
+        // Row C: Microsoft OAuth2 Status & Browser Action
+        drawEllipsizedText(canvas, AccountManager.msaAuthStatusText, rightLeft, kY + dp(9f), rightW, mutedPaint)
+        kY += dp(14f)
+
+        // Row D: Share / Export Control .JSON & Import Control .JSON
+        val shareJsonRect = RectF(rightLeft, kY, rightLeft + halfW, kY + dp(28f))
+        val importJsonRect = RectF(rightLeft + halfW + dp(6f), kY, right, kY + dp(28f))
+        canvas.drawRoundRect(shareJsonRect, dp(6f), dp(6f), activeGreenPaint)
+        canvas.drawRoundRect(importJsonRect, dp(6f), dp(6f), terraPaint)
+        drawCenteredButtonText(canvas, "BAGIKAN KONTROL .JSON", shareJsonRect)
+        drawCenteredButtonText(canvas, "IMPOR .JSON CLIPBOARD", importJsonRect)
+        charKeyRects.add("SHARE_JSON" to shareJsonRect)
+        charKeyRects.add("IMPORT_JSON" to importJsonRect)
     }
 
     private fun drawControlsAndCursorTab(
@@ -920,21 +939,45 @@ class CustomCanvasModalView(
         for ((key, rect) in charKeyRects) {
             if (rect.contains(x, y)) {
                 when (key) {
-                    "BACKSPACE" -> {
-                        if (editingUsername.isNotEmpty()) {
-                            editingUsername = editingUsername.dropLast(1)
+                    "MODE_OFFLINE" -> {
+                        val acc = AccountManager.setOfflineAccount(context, editingUsername)
+                        sessionManager.saveOfflineSession(acc.username)
+                        bannerStatusText = "Mode Akun Offline aktif: ${acc.username} (UUID: ${acc.uuid.take(8)}...)"
+                    }
+                    "MODE_MICROSOFT" -> {
+                        AccountManager.setAccountMode(context, AccountManager.AccountType.MICROSOFT)
+                        AccountManager.startMicrosoftLoginFlow(context, openBrowserImmediately = true) {
+                            bannerStatusText = AccountManager.msaAuthStatusText
+                            postInvalidateOnAnimation()
                         }
                     }
-                    "SAVE_USER" -> {
-                        val saved = sessionManager.saveOfflineSession(editingUsername)
-                        editingUsername = saved.username
-                        bannerStatusText = "Username disimpan: ${saved.username} (UUID: ${saved.uuid.take(8)}...)"
-                        VeloLogger.section("AUTH", "Saved Offline Username: ${saved.username} (UUID=${saved.uuid})")
+                    "OPEN_IME_USERNAME" -> {
+                        SystemImeHelper.requestTextInput(
+                            label = "Username Pemain Offline",
+                            initialText = editingUsername,
+                            maxLength = 16,
+                            onChanged = { updated ->
+                                editingUsername = updated.replace(Regex("[^a-zA-Z0-9_]"), "")
+                                val acc = AccountManager.setOfflineAccount(context, editingUsername)
+                                sessionManager.saveOfflineSession(acc.username)
+                                bannerStatusText = "Username diperbarui via IME: ${acc.username}"
+                                postInvalidateOnAnimation()
+                            }
+                        )
                     }
-                    else -> {
-                        if (editingUsername.length < 16) {
-                            editingUsername += key
-                        }
+                    "SHARE_JSON" -> {
+                        val outPath = ControlProfileManager.exportAndShareLayoutJson(
+                            context,
+                            hudView.getButtonsList(),
+                            "kontrol-xyverse-pro",
+                            openShareSheet = true
+                        )
+                        bannerStatusText = "Kontrol .json diekspor & dibagikan: $outPath"
+                    }
+                    "IMPORT_JSON" -> {
+                        val (ok, msg) = ControlProfileManager.importLayoutFromClipboard(context)
+                        if (ok) hudView.reloadLayoutFromDisk()
+                        bannerStatusText = msg
                     }
                 }
                 return

@@ -92,6 +92,7 @@ object NativeEngineBridge {
 
     external fun nativeSetSurface(surface: Surface?, width: Int, height: Int)
     external fun nativeSendKey(glfwKeyCode: Int, action: Int, mods: Int)
+    external fun nativeSendChar(codepoint: Int, mods: Int)
     external fun nativeSendMouseButton(button: Int, action: Int, mods: Int)
     external fun nativeSendCameraDelta(deltaX: Float, deltaY: Float)
     external fun nativeSendCursorPos(x: Float, y: Float)
@@ -154,6 +155,15 @@ object NativeEngineBridge {
 
     fun sendKeyEvent(glfwKeyCode: Int, pressed: Boolean) {
         sendKey(glfwKeyCode, if (pressed) GLFW_PRESS else GLFW_RELEASE, 0)
+    }
+
+    fun sendChar(codepoint: Int, mods: Int = 0) {
+        if (!isNativeLoaded) return
+        try {
+            nativeSendChar(codepoint, mods)
+        } catch (t: Throwable) {
+            VeloLogger.error("nativeSendChar error", t)
+        }
     }
 
     fun sendMouseButton(button: Int, action: Int, mods: Int = 0) {

@@ -1,12 +1,15 @@
 package io.velocraft.android.engine
 
 import android.content.Context
+import io.velocraft.android.util.VeloLogger
 import org.json.JSONObject
 import java.io.File
 
 /**
  * Manages the local directory structure, pre-tuned configuration files (`options.txt`,
- * `sodium-options.json`, `modernfix-mixins.properties`), Android LWJGL 3 GLFW classes jar,
+ * `sodium-options.json`, `immediatelyfast.json`, `modernfix-mixins.properties`),
+ * renderer-aware mod compatibility guards (preventing GL4ES 1.1.5 `GL_COPY_WRITE_BUFFER`
+ * `__memcpy_a53` crashes on world join), Android LWJGL 3 GLFW classes jar,
  * and external shaderpack synchronization for Minecraft 1.20.4 (Fabric).
  */
 class DirectBootProvisioner(private val context: Context) {
@@ -42,8 +45,10 @@ class DirectBootProvisioner(private val context: Context) {
         cleanupConflictingDesktopLibraries()
         writePreTunedOptionsTxt(profile.getJSONObject("defaultOptionsTxt"), includeFullMusicAssets)
         writePreTunedSodiumOptions(profile.getJSONObject("defaultSodiumOptions"))
+        writePreTunedImmediatelyFastOptions()
         writePreTunedModernFixOptions()
         extractBundledBridgeMod()
+        enforceRendererModCompatibility()
         writeModStackManifest(profile)
         RendererProfileManager.syncExternalShaderpacks(gameDir, configDir)
     }
@@ -75,7 +80,7 @@ class DirectBootProvisioner(private val context: Context) {
                         input.copyTo(output)
                     }
                 }
-                lwjglMarkerFile.writeText("v0.7.4-nocheck\n")
+                lwjglMarkerFile.writeText("v0.7.8-nocheck\n")
             }
         } catch (_: Exception) {
         }
@@ -85,11 +90,12 @@ class DirectBootProvisioner(private val context: Context) {
         val optionsFile = File(gameDir, "options.txt")
         if (optionsFile.exists() && optionsFile.length() > 50L) return
         val hw = JvmOptimizer.detectHardware(context)
+        val defaultRenderDist = if (!hw.is64Bit || hw.totalRamMb <= 3500) 4 else opts.optInt("renderDistance", 6)
         val musicVolume = if (includeFullMusicAssets) "1.0" else "0.0"
         val lines = buildString {
             appendLine("version:3700")
-            appendLine("renderDistance:${opts.optInt("renderDistance", 6)}")
-            appendLine("simulationDistance:${opts.optInt("simulationDistance", 5)}")
+            appendLine("renderDistance:$defaultRenderDist")
+            appendLine("simulationDistance:5")
             appendLine("entityDistanceScaling:${opts.optDouble("entityDistanceScaling", 0.75)}")
             appendLine("maxFps:${opts.optInt("maxFps", 120)}")
             appendLine("enableVsync:${opts.optBoolean("enableVsync", false)}")
@@ -109,9 +115,13 @@ class DirectBootProvisioner(private val context: Context) {
         optionsFile.writeText(lines)
     }
 
+    /**
+     * Always enforces safe non-persistent staging buffers (`use_advanced_staging_buffers: false`),
+     * `use_fog_occlusion: false`, and `use_compact_vertex_format: false` so Sodium never calls
+     * `glMapBufferRange(GL_MAP_PERSISTENT_BIT)` on mobile OpenGL wrappers.
+     */
     private fun writePreTunedSodiumOptions(sodiumOpts: JSONObject) {
         val sodiumFile = File(configDir, "sodium-options.json")
-        if (sodiumFile.exists()) return
         val hw = JvmOptimizer.detectHardware(context)
         val root = JSONObject().apply {
             put("quality", JSONObject().apply {
@@ -124,15 +134,35 @@ class DirectBootProvisioner(private val context: Context) {
                 put("always_defer_chunk_updates", true)
                 put("animate_only_visible_textures", true)
                 put("use_entity_culling", true)
-                put("use_fog_occlusion", true)
-                put("use_compact_vertex_format", true)
+                put("use_block_face_culling", true)
+                put("use_fog_occlusion", false)
+                put("use_compact_vertex_format", false)
+                put("use_no_error_context", false)
             })
             put("advanced", JSONObject().apply {
                 put("enable_memory_tracing", false)
-                put("use_advanced_staging_buffers", true)
+                put("use_advanced_staging_buffers", false)
+                put("cpu_render_ahead_limit", 3)
             })
         }
         sodiumFile.writeText(root.toString(2))
+    }
+
+    /**
+     * Disables ImmediatelyFast's persistent ring buffer (`fast_buffer_upload: false`) which
+     * otherwise crashes PowerVR / Mali GPUs on world join.
+     */
+    private fun writePreTunedImmediatelyFastOptions() {
+        val ifFile = File(configDir, "immediatelyfast.json")
+        val root = JSONObject().apply {
+            put("font_atlas_resizing", false)
+            put("map_atlas_generation", true)
+            put("hud_batching", true)
+            put("fast_text_lookup", true)
+            put("fast_buffer_upload", false)
+            put("experimental_screen_batching", false)
+        }
+        ifFile.writeText(root.toString(2))
     }
 
     /**
@@ -150,6 +180,48 @@ class DirectBootProvisioner(private val context: Context) {
             appendLine("mixin.launch.class_search_cache=true")
         }
         mfFile.writeText(content)
+    }
+
+    /**
+     * Ensures renderer-incompatible mods are safely guarded before launch:
+     * - On GL4ES 1.1.5 (`OpenGL 2.1` over GLES 2.0), `libgl4es_114.so` (`buffers.c`) only supports
+     *   `GL_ARRAY_BUFFER` and `GL_ELEMENT_ARRAY_BUFFER` and does NOT implement `GL_COPY_READ_BUFFER`
+     *   (`0x8F36`) or `GL_COPY_WRITE_BUFFER` (`0x8F37`). Sodium 0.5.8 (`PlutoBufferArena`) and Iris
+     *   require `GL_COPY_WRITE_BUFFER`, causing `SIGSEGV` in `__memcpy_a53` when joining a world.
+     *   Therefore, on `GL4ES`, we automatically disable `sodium`, `iris`, and `immediatelyfast` while
+     *   keeping `modernfix`, `lithium`, `ferrite-core`, `entityculling`, `modmenu`, and `fabric-api`
+     *   enabled so chunks render via Blaze3D hardware VBOs with 100% world-join stability!
+     */
+    private fun enforceRendererModCompatibility() {
+        try {
+            val effectiveRenderer = RendererProfileManager.resolveEffectiveBackend(context)
+            val isGl4es = effectiveRenderer == RendererProfileManager.RendererBackend.GL4ES
+            val shadersActive = effectiveRenderer.supportsShaders && RendererProfileManager.isShaderSupportEnabled(context)
+
+            val files = modsDir.listFiles() ?: return
+            for (file in files) {
+                val lower = file.name.lowercase()
+                val isGl32ChunkMod = lower.contains("sodium") || lower.contains("iris") || lower.contains("immediatelyfast")
+                val isIrisOnly = lower.contains("iris")
+
+                if (isGl4es && isGl32ChunkMod) {
+                    if (file.name.endsWith(".jar")) {
+                        val disabled = File(file.parentFile, "${file.name}.disabled")
+                        file.renameTo(disabled)
+                        VeloLogger.section(
+                            "COMPAT-GUARD",
+                            "GL4ES 1.1.5 (OpenGL 2.1) aktif: Menonaktifkan otomatis ${file.name} untuk mencegah crash __memcpy_a53 saat masuk dunia (menggunakan Hardware VBO + Lithium + FerriteCore + ModernFix)."
+                        )
+                    }
+                } else if (!shadersActive && isIrisOnly) {
+                    if (file.name.endsWith(".jar")) {
+                        val disabled = File(file.parentFile, "${file.name}.disabled")
+                        file.renameTo(disabled)
+                    }
+                }
+            }
+        } catch (_: Exception) {
+        }
     }
 
     private fun extractBundledBridgeMod() {

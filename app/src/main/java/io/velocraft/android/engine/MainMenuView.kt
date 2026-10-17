@@ -8,6 +8,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
@@ -16,27 +17,33 @@ import android.util.TypedValue
 import android.view.MotionEvent
 import android.view.View
 import io.velocraft.android.auth.PlayerSessionManager
+import io.velocraft.android.controls.ControlProfileManager
+import io.velocraft.android.util.SystemImeHelper
 import io.velocraft.android.util.VeloLogger
 import kotlin.math.max
 
 /**
- * Clean, Structured 6-Page Studio Launcher Console for Minecraft: Java Edition (1.20.4 Fabric).
+ * Clean, Icon-Enhanced 6-Page Studio Launcher Console for Minecraft: Java Edition (1.20.4 Fabric).
  *
- * Designed with a Left Navigation Sidebar, crisp card grid alignment, automatic text-fitting
- * (zero text overflow), zero stock Android widgets, zero neon, and zero emojis.
+ * Features:
+ * - Left Navigation Sidebar with custom geometric vector icons (Canvas Path, zero emojis)
+ * - Scrollable content support across Modrinth Sync, Controls/JSON, and Logs
+ * - Page 3: Built-in Mod/Shader Manager + Live Modrinth v2 Online Mod Search & Sync
+ * - Page 4: Visual HUD Editor, Keybind PC/Gamepad, Sensitivity/Cursor, & Share/Import Control .JSON
+ * - Page 5: Microsoft Official Account (OAuth2 Device Flow) + Offline Account via Android System IME Keyboard
  */
 class MainMenuView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null
 ) : View(context, attrs) {
 
-    enum class NavPage(val label: String) {
-        HOME("BERANDA"),
-        MEMORY_ENGINE("MEMORI & ENGINE"),
-        MODS_SHADERS("MODS & SHADER"),
-        CONTROLS_HUD("KONTROL & HUD"),
-        ACCOUNT("AKUN PEMAIN"),
-        LOGS("LOG DIAGNOSTIK")
+    enum class NavPage(val label: String, val iconType: Int) {
+        HOME("BERANDA", 0),
+        MEMORY_ENGINE("MEMORI & ENGINE", 1),
+        MODS_SHADERS("MODS & MODRINTH", 2),
+        CONTROLS_HUD("KONTROL & JSON", 3),
+        ACCOUNT("AKUN PEMAIN", 4),
+        LOGS("LOG DIAGNOSTIK", 5)
     }
 
     // Callbacks wired by GameActivity
@@ -46,6 +53,7 @@ class MainMenuView @JvmOverloads constructor(
     var onOpenQuickSettings: (() -> Unit)? = null
     var onOpenRendererAndKeybindModal: (() -> Unit)? = null
     var onOpenVisualHudEditor: (() -> Unit)? = null
+    var onControlJsonReloadRequested: (() -> Unit)? = null
 
     private fun sanitizeLogLines(rawLines: List<String>): List<String> {
         return rawLines.map { raw ->
@@ -60,23 +68,35 @@ class MainMenuView @JvmOverloads constructor(
     private var activePage: NavPage = NavPage.HOME
         set(value) {
             field = value
+            pageScrollY = 0f
             if (value == NavPage.LOGS) {
                 logLines = sanitizeLogLines(VeloLogger.readLatestLogsTail(15000).lines())
                 logScrollY = 0f
+            } else if (value == NavPage.MODS_SHADERS && modrinthCatalog.isEmpty() && !ModrinthSyncManager.isLoading) {
+                triggerModrinthFetch(modrinthQuery)
             }
             postInvalidateOnAnimation()
         }
 
     private val sessionManager = PlayerSessionManager(context)
-    private var editingUsername: String = sessionManager.getActiveSession().username
+    private var editingUsername: String = AccountManager.getActiveAccount(context).username
     private var skipMusicLite: Boolean = ResumableDownloadEngine.isSkipMusicLiteEnabled(context)
     private var readiness = ResumableDownloadEngine.inspectEngineReadiness(context)
     private var downloadState = EngineDownloadService.latestState
 
-    // Log scroll state
+    // Scroll states
+    private var pageScrollY: Float = 0f
+    private var pageContentHeight: Float = 0f
     private var logLines: List<String> = emptyList()
     private var logScrollY: Float = 0f
     private var lastTouchY: Float = 0f
+    private var touchDownY: Float = 0f
+    private var isDraggingScroll: Boolean = false
+
+    // Page 3 Sub-Mode: false = Built-in Mods & Shaders, true = Live Modrinth Sync & Search
+    private var isModrinthOnlineTab: Boolean = false
+    private var modrinthQuery: String = ""
+    private var modrinthCatalog: List<ModrinthSyncManager.ModrinthProjectItem> = emptyList()
 
     // Assets
     private val markBmp: Bitmap? = loadAssetBitmap("branding/xyverse_mark.png")
@@ -110,20 +130,29 @@ class MainMenuView @JvmOverloads constructor(
     private val gcG1Rect = RectF()
     private val gcZgcRect = RectF()
 
-    // Page 3 (MODS & SHADERS) Hit Rects
+    // Page 3 (MODS, SHADERS & MODRINTH) Hit Rects
+    private val modsSubTabLocalRect = RectF()
+    private val modsSubTabModrinthRect = RectF()
     private val modCardRects = mutableListOf<Pair<String, RectF>>()
     private val shaderToggleRect = RectF()
     private val shaderCycleRect = RectF()
     private val shaderSyncRect = RectF()
+    private val modrinthSearchInputRect = RectF()
+    private val modrinthSearchBtnRect = RectF()
+    private val modrinthSyncAllBtnRect = RectF()
+    private val modrinthItemRects = mutableListOf<Pair<ModrinthSyncManager.ModrinthProjectItem, RectF>>()
 
-    // Page 4 (CONTROLS & HUD) Hit Rects
+    // Page 4 (CONTROLS, HUD & JSON) Hit Rects
     private val ctrlVisualHudBtnRect = RectF()
     private val ctrlKeybindModalBtnRect = RectF()
     private val ctrlSettingsModalBtnRect = RectF()
     private val ctrlOverlayPermBtnRect = RectF()
+    private val ctrlExportShareJsonRect = RectF()
+    private val ctrlCopyJsonClipRect = RectF()
+    private val ctrlImportJsonClipRect = RectF()
 
-    // Page 5 (ACCOUNT) Hit Rects
-    private val accountKeyRects = mutableListOf<Pair<String, RectF>>()
+    // Page 5 (ACCOUNT: MICROSOFT & OFFLINE + SYSTEM IME) Hit Rects
+    private val accountActionRects = mutableListOf<Pair<String, RectF>>()
 
     // Page 6 (LOGS) Hit Rects
     private val logRefreshRect = RectF()
@@ -146,9 +175,19 @@ class MainMenuView @JvmOverloads constructor(
     }
     private val accentGreenPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF4E8C57.toInt() }
     private val accentTerraPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFC87D55.toInt() }
+    private val accentSlatePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF3A5268.toInt() }
     private val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF2C2B26.toInt() }
     private val scrimPaint = Paint().apply { color = 0xB8121211.toInt() }
     private val bitmapPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+
+    private val vectorIconPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xFFF4F1EA.toInt()
+        style = Paint.Style.STROKE
+        strokeWidth = dp(1.6f)
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+    }
+    private val vectorPath = Path()
 
     // Typography
     private val h1Paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -158,25 +197,25 @@ class MainMenuView @JvmOverloads constructor(
     }
     private val h2Paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = 0xFFEAE6DC.toInt()
-        textSize = dp(12.5f)
+        textSize = dp(12.2f)
         isFakeBoldText = true
     }
     private val bodyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = 0xFFD4CFC4.toInt()
-        textSize = dp(11f)
+        textSize = dp(10.8f)
     }
     private val bodyBoldPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = 0xFFF4F1EA.toInt()
-        textSize = dp(11f)
+        textSize = dp(10.8f)
         isFakeBoldText = true
     }
     private val mutedPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = 0xFF969186.toInt()
-        textSize = dp(9.8f)
+        textSize = dp(9.6f)
     }
     private val btnTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = 0xFFF4F1EA.toInt()
-        textSize = dp(10.8f)
+        textSize = dp(10.4f)
         isFakeBoldText = true
         textAlign = Paint.Align.CENTER
     }
@@ -189,6 +228,7 @@ class MainMenuView @JvmOverloads constructor(
     private val tmpRect = RectF()
     private val srcRect = Rect()
     private val dstRect = RectF()
+    private val bannerRect = RectF()
 
     private fun dp(value: Float): Float =
         TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, value, resources.displayMetrics)
@@ -221,6 +261,13 @@ class MainMenuView @JvmOverloads constructor(
         postInvalidateOnAnimation()
     }
 
+    private fun triggerModrinthFetch(query: String) {
+        ModrinthSyncManager.searchFabricModsAsync(context, query) { items, _ ->
+            modrinthCatalog = items
+            postInvalidateOnAnimation()
+        }
+    }
+
     fun refreshState(newState: ResumableDownloadEngine.DownloadProgressState? = null) {
         if (newState != null) {
             downloadState = newState
@@ -235,6 +282,73 @@ class MainMenuView @JvmOverloads constructor(
         postInvalidateOnAnimation()
     }
 
+    /**
+     * Draws clean geometric vector icons for navigation sidebar items & cards (zero emojis).
+     */
+    private fun drawNavVectorIcon(canvas: Canvas, iconType: Int, cx: Float, cy: Float, r: Float, color: Int) {
+        vectorIconPaint.color = color
+        vectorIconPaint.style = Paint.Style.STROKE
+        vectorIconPaint.strokeWidth = dp(1.5f)
+        vectorPath.reset()
+        when (iconType) {
+            0 -> {
+                // HOME: House roof + walls
+                vectorPath.moveTo(cx - r, cy - r * 0.1f)
+                vectorPath.lineTo(cx, cy - r * 0.95f)
+                vectorPath.lineTo(cx + r, cy - r * 0.1f)
+                vectorPath.moveTo(cx - r * 0.72f, cy - r * 0.2f)
+                vectorPath.lineTo(cx - r * 0.72f, cy + r * 0.85f)
+                vectorPath.lineTo(cx + r * 0.72f, cy + r * 0.85f)
+                vectorPath.lineTo(cx + r * 0.72f, cy - r * 0.2f)
+                canvas.drawPath(vectorPath, vectorIconPaint)
+            }
+            1 -> {
+                // MEMORY & ENGINE: CPU Chip + pins
+                tmpRect.set(cx - r * 0.65f, cy - r * 0.65f, cx + r * 0.65f, cy + r * 0.65f)
+                canvas.drawRoundRect(tmpRect, dp(2f), dp(2f), vectorIconPaint)
+                canvas.drawLine(cx - r, cy - r * 0.3f, cx - r * 0.65f, cy - r * 0.3f, vectorIconPaint)
+                canvas.drawLine(cx - r, cy + r * 0.3f, cx - r * 0.65f, cy + r * 0.3f, vectorIconPaint)
+                canvas.drawLine(cx + r * 0.65f, cy - r * 0.3f, cx + r, cy - r * 0.3f, vectorIconPaint)
+                canvas.drawLine(cx + r * 0.65f, cy + r * 0.3f, cx + r, cy + r * 0.3f, vectorIconPaint)
+            }
+            2 -> {
+                // MODS & MODRINTH: Isometric Cube / Puzzle
+                vectorPath.moveTo(cx, cy - r * 0.95f)
+                vectorPath.lineTo(cx + r * 0.85f, cy - r * 0.45f)
+                vectorPath.lineTo(cx + r * 0.85f, cy + r * 0.45f)
+                vectorPath.lineTo(cx, cy + r * 0.95f)
+                vectorPath.lineTo(cx - r * 0.85f, cy + r * 0.45f)
+                vectorPath.lineTo(cx - r * 0.85f, cy - r * 0.45f)
+                vectorPath.close()
+                vectorPath.moveTo(cx, cy - r * 0.95f)
+                vectorPath.lineTo(cx, cy + r * 0.95f)
+                canvas.drawPath(vectorPath, vectorIconPaint)
+            }
+            3 -> {
+                // CONTROLS & JSON: Sliders / Cross D-Pad
+                canvas.drawLine(cx - r * 0.85f, cy - r * 0.45f, cx + r * 0.85f, cy - r * 0.45f, vectorIconPaint)
+                canvas.drawCircle(cx - r * 0.25f, cy - r * 0.45f, r * 0.24f, vectorIconPaint)
+                canvas.drawLine(cx - r * 0.85f, cy + r * 0.45f, cx + r * 0.85f, cy + r * 0.45f, vectorIconPaint)
+                canvas.drawCircle(cx + r * 0.3f, cy + r * 0.45f, r * 0.24f, vectorIconPaint)
+            }
+            4 -> {
+                // ACCOUNT: User Head + Shoulders
+                canvas.drawCircle(cx, cy - r * 0.35f, r * 0.38f, vectorIconPaint)
+                tmpRect.set(cx - r * 0.8f, cy + r * 0.15f, cx + r * 0.8f, cy + r * 1.1f)
+                canvas.drawArc(tmpRect, 180f, 180f, false, vectorIconPaint)
+            }
+            5 -> {
+                // LOGS: Terminal Prompt (> _)
+                vectorPath.moveTo(cx - r * 0.75f, cy - r * 0.45f)
+                vectorPath.lineTo(cx - r * 0.2f, cy)
+                vectorPath.lineTo(cx - r * 0.75f, cy + r * 0.45f)
+                vectorPath.moveTo(cx + r * 0.05f, cy + r * 0.45f)
+                vectorPath.lineTo(cx + r * 0.75f, cy + r * 0.45f)
+                canvas.drawPath(vectorPath, vectorIconPaint)
+            }
+        }
+    }
+
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         val w = width.toFloat()
@@ -244,32 +358,32 @@ class MainMenuView @JvmOverloads constructor(
         canvas.drawRect(0f, 0f, w, h, bgPaint)
 
         // =========================================================================
-        // 1. LEFT NAVIGATION SIDEBAR
+        // 1. LEFT NAVIGATION SIDEBAR WITH VECTOR ICONS
         // =========================================================================
-        val sidebarW = dp(164f).coerceAtMost(w * 0.24f)
+        val sidebarW = dp(172f).coerceAtMost(w * 0.25f)
         canvas.drawRect(0f, 0f, sidebarW, h, sidebarPaint)
         canvas.drawLine(sidebarW, 0f, sidebarW, h, borderPaint)
 
-        val sbPad = dp(12f)
-        var sbY = dp(16f)
+        val sbPad = dp(11f)
+        var sbY = dp(14f)
 
-        // Clean Brand Header inside Sidebar (No boastful founder/publisher text)
+        // Clean Brand Header inside Sidebar
         markBmp?.let { bmp ->
             val iconSz = dp(28f)
             srcRect.set(0, 0, bmp.width, bmp.height)
             dstRect.set(sbPad, sbY, sbPad + iconSz, sbY + iconSz)
             canvas.drawBitmap(bmp, srcRect, dstRect, bitmapPaint)
-            drawFittedText(canvas, "MINECRAFT", sbPad + iconSz + dp(8f), sbY + dp(13f), sidebarW - iconSz - dp(24f), bodyBoldPaint)
-            drawFittedText(canvas, "1.20.4 Fabric", sbPad + iconSz + dp(8f), sbY + dp(26f), sidebarW - iconSz - dp(24f), mutedPaint)
+            drawFittedText(canvas, "MINECRAFT", sbPad + iconSz + dp(8f), sbY + dp(13f), sidebarW - iconSz - dp(22f), bodyBoldPaint)
+            drawFittedText(canvas, "1.20.4 Fabric", sbPad + iconSz + dp(8f), sbY + dp(26f), sidebarW - iconSz - dp(22f), mutedPaint)
         } ?: run {
             drawFittedText(canvas, "MINECRAFT 1.20.4", sbPad, sbY + dp(16f), sidebarW - sbPad * 2f, bodyBoldPaint)
         }
 
-        sbY += dp(40f)
+        sbY += dp(38f)
         canvas.drawLine(sbPad, sbY, sidebarW - sbPad, sbY, borderPaint)
-        sbY += dp(10f)
+        sbY += dp(9f)
 
-        val navBtnH = ((h - sbY - dp(38f)) / NavPage.values().size).coerceIn(dp(30f), dp(40f))
+        val navBtnH = ((h - sbY - dp(36f)) / NavPage.values().size).coerceIn(dp(30f), dp(40f))
         for ((idx, page) in NavPage.values().withIndex()) {
             val top = sbY + idx * (navBtnH + dp(4f))
             navRects[idx].set(sbPad, top, sidebarW - sbPad, top + navBtnH - dp(2f))
@@ -282,9 +396,9 @@ class MainMenuView @JvmOverloads constructor(
             )
             if (isSelected) {
                 dstRect.set(
-                    navRects[idx].left + dp(3.5f),
+                    navRects[idx].left + dp(3f),
                     navRects[idx].top + dp(5f),
-                    navRects[idx].left + dp(6.8f),
+                    navRects[idx].left + dp(6f),
                     navRects[idx].bottom - dp(5f)
                 )
                 bodyBoldPaint.color = 0xFFF4F1EA.toInt()
@@ -292,13 +406,26 @@ class MainMenuView @JvmOverloads constructor(
             } else {
                 canvas.drawRoundRect(navRects[idx], dp(7f), dp(7f), borderPaint)
             }
+
+            // Custom Vector Icon on Left of Sidebar Button
+            val iconCx = navRects[idx].left + dp(17f)
+            val iconCy = navRects[idx].centerY()
+            drawNavVectorIcon(
+                canvas,
+                page.iconType,
+                iconCx,
+                iconCy,
+                dp(6.5f),
+                if (isSelected) 0xFFF4F1EA.toInt() else 0xFFB0ABA0.toInt()
+            )
+
             btnTextPaint.textAlign = Paint.Align.LEFT
             drawFittedText(
                 canvas,
                 page.label,
-                navRects[idx].left + dp(13f),
-                navRects[idx].centerY() + dp(3.8f),
-                navRects[idx].width() - dp(22f),
+                navRects[idx].left + dp(30f),
+                navRects[idx].centerY() + dp(3.6f),
+                navRects[idx].width() - dp(36f),
                 btnTextPaint
             )
             btnTextPaint.textAlign = Paint.Align.CENTER
@@ -307,9 +434,9 @@ class MainMenuView @JvmOverloads constructor(
         // Subtle version footer at bottom of sidebar
         drawFittedText(
             canvas,
-            "v0.7.7-release | ${if (android.os.Process.is64Bit()) "ARM64" else "ARM32"}",
+            "v0.7.8-release | ${if (android.os.Process.is64Bit()) "ARM64" else "ARM32"}",
             sbPad,
-            h - dp(12f),
+            h - dp(11f),
             sidebarW - sbPad * 2f,
             mutedPaint
         )
@@ -317,10 +444,10 @@ class MainMenuView @JvmOverloads constructor(
         // =========================================================================
         // 2. MAIN WORKSPACE CONTENT AREA
         // =========================================================================
-        val contentLeft = sidebarW + dp(16f)
-        val contentRight = w - dp(16f)
-        val contentTop = dp(14f)
-        val contentBottom = h - dp(14f)
+        val contentLeft = sidebarW + dp(15f)
+        val contentRight = w - dp(15f)
+        val contentTop = dp(13f)
+        val contentBottom = h - dp(13f)
 
         when (activePage) {
             NavPage.HOME -> drawHomePage(canvas, contentLeft, contentTop, contentRight, contentBottom)
@@ -334,9 +461,9 @@ class MainMenuView @JvmOverloads constructor(
         // Top In-Canvas Notification Toast Banner
         val msg = bannerMessage
         if (msg != null && System.currentTimeMillis() < bannerExpireAtMs) {
-            val bw = (contentRight - contentLeft).coerceAtMost(dp(560f))
+            val bw = (contentRight - contentLeft).coerceAtMost(dp(580f))
             val bLeft = contentLeft + ((contentRight - contentLeft) - bw) * 0.5f
-            bannerRect.set(bLeft, dp(12f), bLeft + bw, dp(44f))
+            bannerRect.set(bLeft, dp(10f), bLeft + bw, dp(42f))
             canvas.drawRoundRect(bannerRect, dp(8f), dp(8f), accentGreenPaint)
             canvas.drawRoundRect(bannerRect, dp(8f), dp(8f), borderPaint)
             drawFittedText(canvas, msg, bannerRect.left + dp(14f), bannerRect.centerY() + dp(4f), bw - dp(28f), bodyBoldPaint)
@@ -346,14 +473,12 @@ class MainMenuView @JvmOverloads constructor(
     // =========================================================================
     // PAGE 1: BERANDA (HERO BANNER + STATUS GRID + LAUNCH / DOWNLOAD CONSOLE)
     // =========================================================================
-    private val bannerRect = RectF()
-
     private fun drawHomePage(canvas: Canvas, left: Float, top: Float, right: Float, bottom: Float) {
         val totalW = right - left
         val totalH = bottom - top
         val hw = JvmOptimizer.detectHardware(context)
         val effectiveRenderer = RendererProfileManager.resolveEffectiveBackend(context)
-        val session = sessionManager.getActiveSession()
+        val activeAcc = AccountManager.getActiveAccount(context)
 
         // 1. Top Hero Banner Card (36% of height)
         val heroH = (totalH * 0.37f).coerceIn(dp(96f), dp(142f))
@@ -370,7 +495,6 @@ class MainMenuView @JvmOverloads constructor(
         }
         canvas.drawRoundRect(tmpRect, dp(10f), dp(10f), borderPaint)
 
-        // Mascot Avatar inside Left of Hero Card
         var heroTextLeft = left + dp(16f)
         mascotBmp?.let { mBmp ->
             val mSz = (heroH - dp(22f)).coerceIn(dp(64f), dp(104f))
@@ -392,40 +516,41 @@ class MainMenuView @JvmOverloads constructor(
         )
         drawFittedText(
             canvas,
-            "Renderer: ${effectiveRenderer.displayName}  |  Resolusi: ${hw.resolutionScalePct}%  |  Shader: ${if (RendererProfileManager.isShaderSupportEnabled(context)) "Aktif" else "Nonaktif"}",
+            "Renderer: ${effectiveRenderer.displayName}  |  Resolusi: ${hw.resolutionScalePct}%  |  Akun: ${activeAcc.type.label}",
             heroTextLeft,
             top + dp(45f),
             maxHeroTextW,
             bodyPaint
         )
 
-        // Two Quick Info Pills inside Hero Card (Account Pill + RAM Pill)
         val pillY = top + heroH - dp(36f)
         val pillH = dp(26f)
-        val pillW = ((maxHeroTextW - dp(10f)) * 0.5f).coerceAtMost(dp(220f))
+        val pillW = ((maxHeroTextW - dp(10f)) * 0.5f).coerceAtMost(dp(235f))
 
         homeQuickAccountRect.set(heroTextLeft, pillY, heroTextLeft + pillW, pillY + pillH)
         canvas.drawRoundRect(homeQuickAccountRect, dp(6f), dp(6f), cardElevatedPaint)
         canvas.drawRoundRect(homeQuickAccountRect, dp(6f), dp(6f), borderPaint)
+        drawNavVectorIcon(canvas, 4, homeQuickAccountRect.left + dp(12f), homeQuickAccountRect.centerY(), dp(5.5f), 0xFFF4F1EA.toInt())
         drawFittedText(
             canvas,
-            "Pemain: ${session.username} [Ubah]",
-            homeQuickAccountRect.left + dp(10f),
+            "${activeAcc.username} (${if (activeAcc.type == AccountManager.AccountType.MICROSOFT) "MSA" else "Offline"}) [Ubah]",
+            homeQuickAccountRect.left + dp(23f),
             homeQuickAccountRect.centerY() + dp(3.8f),
-            pillW - dp(20f),
+            pillW - dp(30f),
             bodyBoldPaint
         )
 
         homeQuickRamRect.set(homeQuickAccountRect.right + dp(8f), pillY, homeQuickAccountRect.right + dp(8f) + pillW, pillY + pillH)
         canvas.drawRoundRect(homeQuickRamRect, dp(6f), dp(6f), cardElevatedPaint)
         canvas.drawRoundRect(homeQuickRamRect, dp(6f), dp(6f), borderPaint)
+        drawNavVectorIcon(canvas, 1, homeQuickRamRect.left + dp(12f), homeQuickRamRect.centerY(), dp(5.5f), 0xFFF4F1EA.toInt())
         val ramTag = if (hw.isCustomHeap) "Custom" else "Saran"
         drawFittedText(
             canvas,
-            "RAM JVM: ${hw.allocatedHeapMb} MB ($ramTag) [Atur]",
-            homeQuickRamRect.left + dp(10f),
+            "RAM: ${hw.allocatedHeapMb} MB ($ramTag) [Atur]",
+            homeQuickRamRect.left + dp(23f),
             homeQuickRamRect.centerY() + dp(3.8f),
-            pillW - dp(20f),
+            pillW - dp(30f),
             bodyBoldPaint
         )
 
@@ -438,7 +563,7 @@ class MainMenuView @JvmOverloads constructor(
         val statusItems = listOf(
             Triple("OpenJDK 17 Runtime", readiness.isOpenJdkRuntimeReady, if (readiness.isOpenJdkRuntimeReady) "Siap (${hw.abi})" else "Belum Terpasang"),
             Triple("Client 1.20.4 & Libs", readiness.isClientJarReady, if (readiness.isClientJarReady) "Terverifikasi" else "Perlu Diunduh"),
-            Triple("ModMenu, Optimasi & Iris", readiness.installedModsCount >= 6, "${readiness.installedModsCount}/9 Mod Terpasang"),
+            Triple("ModMenu, Optimasi & Modrinth", readiness.installedModsCount >= 6, "${readiness.installedModsCount}/9 Mod Inti Siap"),
             Triple("Asset Suara & Tekstur", readiness.isAssetIndexReady, if (readiness.isAssetIndexReady) "Index 12.json Siap" else "Belum Lengkap")
         )
 
@@ -448,7 +573,6 @@ class MainMenuView @JvmOverloads constructor(
             canvas.drawRoundRect(tmpRect, dp(8f), dp(8f), cardPaint)
             canvas.drawRoundRect(tmpRect, dp(8f), dp(8f), if (item.second) activeBorderPaint else borderPaint)
 
-            // Pill badge inside top-left of card
             val badgeText = if (item.second) "SIAP" else "BELUM"
             val badgeW = dp(48f)
             val badgeH = dp(15f)
@@ -456,7 +580,7 @@ class MainMenuView @JvmOverloads constructor(
             canvas.drawRoundRect(dstRect, dp(4f), dp(4f), if (item.second) accentGreenPaint else accentTerraPaint)
             btnTextPaint.textSize = dp(8.8f)
             canvas.drawText(badgeText, dstRect.centerX(), dstRect.centerY() + dp(3.1f), btnTextPaint)
-            btnTextPaint.textSize = dp(10.8f)
+            btnTextPaint.textSize = dp(10.4f)
 
             drawFittedText(canvas, item.first, cLeft + dp(10f), gridTop + dp(36f), cardW - dp(20f), bodyBoldPaint)
             drawFittedText(canvas, item.third, cLeft + dp(10f), gridTop + dp(50f), cardW - dp(20f), mutedPaint)
@@ -472,7 +596,6 @@ class MainMenuView @JvmOverloads constructor(
         val innerR = right - dp(14f)
         val innerW = innerR - innerL
 
-        // Left side of Bottom Card: Package Mode Selector (Mode Hemat vs Mode Penuh) + Progress Bar
         val leftZoneW = innerW * 0.58f
         val modeBtnW = (leftZoneW - dp(8f)) * 0.5f
         val modeBtnH = dp(30f)
@@ -489,7 +612,6 @@ class MainMenuView @JvmOverloads constructor(
         canvas.drawRoundRect(homeFullModeRect, dp(6f), dp(6f), borderPaint)
         canvas.drawText("MODE PENUH (~695 MB)", homeFullModeRect.centerX(), homeFullModeRect.centerY() + dp(3.8f), btnTextPaint)
 
-        // Progress Bar below mode buttons
         val pct = downloadState.percent.coerceIn(0, 100)
         val progY = modeY + modeBtnH + dp(16f)
         val statusStr = when {
@@ -509,7 +631,6 @@ class MainMenuView @JvmOverloads constructor(
             canvas.drawRoundRect(dstRect, dp(5f), dp(5f), accentGreenPaint)
         }
 
-        // Right side of Bottom Card: Big Primary Launch / Download Button
         val actionLeft = innerL + leftZoneW + dp(14f)
         homePrimaryActionRect.set(actionLeft, botTop + dp(12f), innerR, bottom - dp(12f))
         val actionPaint = when {
@@ -531,14 +652,14 @@ class MainMenuView @JvmOverloads constructor(
         }
         btnTextPaint.textSize = dp(13.2f)
         canvas.drawText(mainBtnTitle, homePrimaryActionRect.centerX(), homePrimaryActionRect.centerY() - dp(3f), btnTextPaint)
-        btnTextPaint.textSize = dp(9.8f)
+        btnTextPaint.textSize = dp(9.6f)
         canvas.drawText(
             fitText(mainBtnSub, btnTextPaint, homePrimaryActionRect.width() - dp(20f)),
             homePrimaryActionRect.centerX(),
             homePrimaryActionRect.centerY() + dp(13f),
             btnTextPaint
         )
-        btnTextPaint.textSize = dp(10.8f)
+        btnTextPaint.textSize = dp(10.4f)
     }
 
     // =========================================================================
@@ -552,7 +673,6 @@ class MainMenuView @JvmOverloads constructor(
         val rightColW = right - rightColLeft
         val hw = JvmOptimizer.detectHardware(context)
 
-        // LEFT COLUMN CARD: JVM Memory Allocation + Resolution Scale + GC
         tmpRect.set(left, top, left + leftColW, bottom)
         canvas.drawRoundRect(tmpRect, dp(10f), dp(10f), cardPaint)
         canvas.drawRoundRect(tmpRect, dp(10f), dp(10f), borderPaint)
@@ -574,7 +694,6 @@ class MainMenuView @JvmOverloads constructor(
             mutedPaint
         )
 
-        // Interactive RAM Slider
         y += dp(10f)
         ramSliderRect.set(inL, y, inL + inW, y + dp(26f))
         canvas.drawRoundRect(ramSliderRect, dp(7f), dp(7f), trackPaint)
@@ -589,7 +708,6 @@ class MainMenuView @JvmOverloads constructor(
             btnTextPaint
         )
 
-        // [- 128 MB] [SARAN DEFAULT] [+ 128 MB]
         y += dp(34f)
         val stepW = dp(72f)
         val defW = inW - stepW * 2f - dp(12f)
@@ -610,7 +728,6 @@ class MainMenuView @JvmOverloads constructor(
         canvas.drawRoundRect(ramPlusBtnRect, dp(6f), dp(6f), borderPaint)
         canvas.drawText("+ 128 MB", ramPlusBtnRect.centerX(), ramPlusBtnRect.centerY() + dp(3.8f), btnTextPaint)
 
-        // Quick Preset Chips (1024, 1536, 2048, 3072, 4096)
         y += dp(36f)
         ramPresetRects.clear()
         val presets = listOf(1024, 1536, 2048, 3072, 4096)
@@ -626,7 +743,6 @@ class MainMenuView @JvmOverloads constructor(
             ramPresetRects.add(mb to r)
         }
 
-        // Resolution Scale Section
         y += dp(42f)
         drawFittedText(canvas, "Skala Resolusi Render (Boost FPS vs Ketajaman):", inL, y, inW, h2Paint)
         y += dp(8f)
@@ -643,7 +759,6 @@ class MainMenuView @JvmOverloads constructor(
             canvas.drawText(pair.second, r.centerX(), r.centerY() + dp(3.8f), btnTextPaint)
         }
 
-        // Garbage Collector Section
         y += dp(46f)
         drawFittedText(canvas, "Mode JVM Garbage Collector:", inL, y, inW, h2Paint)
         y += dp(8f)
@@ -689,14 +804,39 @@ class MainMenuView @JvmOverloads constructor(
     }
 
     // =========================================================================
-    // PAGE 3: MODS & SHADER (BUILT-IN MOD MANAGER + SHADERPACK MANAGER)
+    // PAGE 3: MODS, SHADER & LIVE MODRINTH SYNC (SCROLLABLE)
     // =========================================================================
     private fun drawModsAndShadersPage(canvas: Canvas, left: Float, top: Float, right: Float, bottom: Float) {
+        val totalW = right - left
+        val halfW = (totalW - dp(10f)) * 0.5f
+
+        // Top Sub-Tab Bar: [MOD BAWAAN & SHADERPACK] vs [SINKRONISASI MODRINTH ONLINE]
+        val subTabH = dp(32f)
+        modsSubTabLocalRect.set(left, top, left + halfW, top + subTabH)
+        modsSubTabModrinthRect.set(left + halfW + dp(10f), top, right, top + subTabH)
+
+        canvas.drawRoundRect(modsSubTabLocalRect, dp(7f), dp(7f), if (!isModrinthOnlineTab) accentGreenPaint else cardElevatedPaint)
+        canvas.drawRoundRect(modsSubTabLocalRect, dp(7f), dp(7f), borderPaint)
+        canvas.drawText("MOD BAWAAN & SHADERPACK (9 MOD)", modsSubTabLocalRect.centerX(), modsSubTabLocalRect.centerY() + dp(3.8f), btnTextPaint)
+
+        canvas.drawRoundRect(modsSubTabModrinthRect, dp(7f), dp(7f), if (isModrinthOnlineTab) accentGreenPaint else cardElevatedPaint)
+        canvas.drawRoundRect(modsSubTabModrinthRect, dp(7f), dp(7f), borderPaint)
+        canvas.drawText("KATALOG & SINKRONISASI MODRINTH (1.20.4)", modsSubTabModrinthRect.centerX(), modsSubTabModrinthRect.centerY() + dp(3.8f), btnTextPaint)
+
+        val bodyTop = top + subTabH + dp(8f)
+        if (!isModrinthOnlineTab) {
+            drawLocalModsAndShaderContent(canvas, left, bodyTop, right, bottom)
+        } else {
+            drawModrinthOnlineContent(canvas, left, bodyTop, right, bottom)
+        }
+    }
+
+    private fun drawLocalModsAndShaderContent(canvas: Canvas, left: Float, top: Float, right: Float, bottom: Float) {
         val totalW = right - left
         val mods = RendererProfileManager.getModStackStatusCompat(context)
 
         // Top Shader Pipeline Bar Card
-        val shaderCardH = dp(62f)
+        val shaderCardH = dp(56f)
         tmpRect.set(left, top, right, top + shaderCardH)
         canvas.drawRoundRect(tmpRect, dp(10f), dp(10f), cardPaint)
         canvas.drawRoundRect(tmpRect, dp(10f), dp(10f), borderPaint)
@@ -707,29 +847,29 @@ class MainMenuView @JvmOverloads constructor(
             canvas,
             "Manajer Shaderpack (Iris Shaders)  |  Paket Aktif: $activePack",
             left + dp(14f),
-            top + dp(20f),
-            totalW * 0.55f,
+            top + dp(19f),
+            totalW * 0.54f,
             h2Paint
         )
         drawFittedText(
             canvas,
-            "Folder: Android/media/${context.packageName}/shaderpacks/ (Taruh file .zip shader di sini)",
+            "Catatan: Pada GL4ES 1.1.5, Sodium/Iris otomatis dinonaktifkan saat masuk dunia agar bebas crash VBO.",
             left + dp(14f),
-            top + dp(38f),
-            totalW * 0.55f,
+            top + dp(37f),
+            totalW * 0.54f,
             mutedPaint
         )
 
-        val btnW = dp(108f)
-        val btnH = dp(34f)
+        val btnW = dp(104f)
+        val btnH = dp(32f)
         val btnY = top + (shaderCardH - btnH) * 0.5f
         shaderSyncRect.set(right - dp(12f) - btnW, btnY, right - dp(12f), btnY + btnH)
-        shaderCycleRect.set(shaderSyncRect.left - dp(8f) - btnW, btnY, shaderSyncRect.left - dp(8f), btnY + btnH)
-        shaderToggleRect.set(shaderCycleRect.left - dp(8f) - btnW, btnY, shaderCycleRect.left - dp(8f), btnY + btnH)
+        shaderCycleRect.set(shaderSyncRect.left - dp(7f) - btnW, btnY, shaderSyncRect.left - dp(7f), btnY + btnH)
+        shaderToggleRect.set(shaderCycleRect.left - dp(7f) - btnW, btnY, shaderCycleRect.left - dp(7f), btnY + btnH)
 
         canvas.drawRoundRect(shaderToggleRect, dp(7f), dp(7f), if (shadersOn) accentGreenPaint else cardElevatedPaint)
         canvas.drawRoundRect(shaderToggleRect, dp(7f), dp(7f), borderPaint)
-        canvas.drawText(if (shadersOn) "SHADER: AKTIF" else "SHADER: OFF", shaderToggleRect.centerX(), shaderToggleRect.centerY() + dp(3.8f), btnTextPaint)
+        canvas.drawText(if (shadersOn) "SHADER: ON" else "SHADER: OFF", shaderToggleRect.centerX(), shaderToggleRect.centerY() + dp(3.8f), btnTextPaint)
 
         canvas.drawRoundRect(shaderCycleRect, dp(7f), dp(7f), cardElevatedPaint)
         canvas.drawRoundRect(shaderCycleRect, dp(7f), dp(7f), borderPaint)
@@ -738,102 +878,206 @@ class MainMenuView @JvmOverloads constructor(
         canvas.drawRoundRect(shaderSyncRect, dp(7f), dp(7f), accentTerraPaint)
         canvas.drawText("SINKRONKAN", shaderSyncRect.centerX(), shaderSyncRect.centerY() + dp(3.8f), btnTextPaint)
 
-        // 2x4 Interactive Mod Stack Grid
-        val gridTop = top + shaderCardH + dp(10f)
+        // Scrollable 2-Column Mod Grid
+        val gridTop = top + shaderCardH + dp(8f)
+        canvas.save()
+        canvas.clipRect(left, gridTop, right, bottom)
+
         val cols = 2
-        val rows = 4
         val gapX = dp(10f)
         val gapY = dp(8f)
         val cellW = (totalW - gapX) / cols
-        val cellH = ((bottom - gridTop - gapY * (rows - 1)) / rows).coerceAtLeast(dp(42f))
+        val cellH = dp(48f)
 
         modCardRects.clear()
+        var maxBottom = gridTop
         for ((idx, mod) in mods.withIndex()) {
             val col = idx % cols
             val row = idx / cols
             val cx = left + col * (cellW + gapX)
-            val cy = gridTop + row * (cellH + gapY)
+            val cy = gridTop + row * (cellH + gapY) - pageScrollY
             val r = RectF(cx, cy, cx + cellW, cy + cellH)
+            maxBottom = max(maxBottom, gridTop + (row + 1) * (cellH + gapY))
 
-            canvas.drawRoundRect(r, dp(8f), dp(8f), cardPaint)
-            canvas.drawRoundRect(r, dp(8f), dp(8f), if (mod.isEnabled) activeBorderPaint else borderPaint)
+            if (r.bottom >= gridTop && r.top <= bottom) {
+                canvas.drawRoundRect(r, dp(8f), dp(8f), cardPaint)
+                canvas.drawRoundRect(r, dp(8f), dp(8f), if (mod.isEnabled) activeBorderPaint else borderPaint)
 
-            // Status Pill on Right of Mod Card
-            val pillW = dp(78f)
-            val pillH = dp(24f)
-            val pillRect = RectF(r.right - dp(10f) - pillW, r.centerY() - pillH * 0.5f, r.right - dp(10f), r.centerY() + pillH * 0.5f)
-            canvas.drawRoundRect(pillRect, dp(6f), dp(6f), if (mod.isEnabled) accentGreenPaint else cardElevatedPaint)
-            canvas.drawText(if (mod.isEnabled) "AKTIF" else "NONAKTIF", pillRect.centerX(), pillRect.centerY() + dp(3.5f), btnTextPaint)
+                val pillW = dp(76f)
+                val pillH = dp(24f)
+                val pillRect = RectF(r.right - dp(10f) - pillW, r.centerY() - pillH * 0.5f, r.right - dp(10f), r.centerY() + pillH * 0.5f)
+                canvas.drawRoundRect(pillRect, dp(6f), dp(6f), if (mod.isEnabled) accentGreenPaint else cardElevatedPaint)
+                canvas.drawText(if (mod.isEnabled) "AKTIF" else "NONAKTIF", pillRect.centerX(), pillRect.centerY() + dp(3.5f), btnTextPaint)
 
-            val textMaxW = cellW - pillW - dp(28f)
-            drawFittedText(canvas, "${mod.title} [${mod.category}]", cx + dp(12f), cy + dp(19f), textMaxW, bodyBoldPaint)
-            drawFittedText(canvas, mod.summary, cx + dp(12f), cy + dp(35f), textMaxW, mutedPaint)
+                val textMaxW = cellW - pillW - dp(26f)
+                drawFittedText(canvas, "${mod.title} [${mod.category}]", cx + dp(12f), cy + dp(19f), textMaxW, bodyBoldPaint)
+                drawFittedText(canvas, mod.summary, cx + dp(12f), cy + dp(35f), textMaxW, mutedPaint)
+            }
             modCardRects.add(mod.slug to r)
         }
+        pageContentHeight = maxBottom - gridTop
+        canvas.restore()
+    }
+
+    private fun drawModrinthOnlineContent(canvas: Canvas, left: Float, top: Float, right: Float, bottom: Float) {
+        val totalW = right - left
+
+        // Search & Sync Bar
+        val barH = dp(34f)
+        val syncW = dp(138f)
+        val cariW = dp(92f)
+        val inputW = totalW - syncW - cariW - dp(16f)
+
+        modrinthSearchInputRect.set(left, top, left + inputW, top + barH)
+        modrinthSearchBtnRect.set(modrinthSearchInputRect.right + dp(8f), top, modrinthSearchInputRect.right + dp(8f) + cariW, top + barH)
+        modrinthSyncAllBtnRect.set(modrinthSearchBtnRect.right + dp(8f), top, right, top + barH)
+
+        canvas.drawRoundRect(modrinthSearchInputRect, dp(7f), dp(7f), cardPaint)
+        canvas.drawRoundRect(modrinthSearchInputRect, dp(7f), dp(7f), borderPaint)
+        val qDisplay = if (modrinthQuery.isBlank()) "Ketuk untuk cari Mod Fabric 1.20.4 via Keyboard IME..." else "Pencarian: $modrinthQuery"
+        drawFittedText(canvas, qDisplay, modrinthSearchInputRect.left + dp(12f), modrinthSearchInputRect.centerY() + dp(3.8f), inputW - dp(24f), bodyBoldPaint)
+
+        canvas.drawRoundRect(modrinthSearchBtnRect, dp(7f), dp(7f), accentGreenPaint)
+        canvas.drawText("CARI MOD", modrinthSearchBtnRect.centerX(), modrinthSearchBtnRect.centerY() + dp(3.8f), btnTextPaint)
+
+        canvas.drawRoundRect(modrinthSyncAllBtnRect, dp(7f), dp(7f), accentTerraPaint)
+        canvas.drawText("SEGARKAN MODRINTH", modrinthSyncAllBtnRect.centerX(), modrinthSyncAllBtnRect.centerY() + dp(3.8f), btnTextPaint)
+
+        val statusY = top + barH + dp(14f)
+        drawFittedText(canvas, ModrinthSyncManager.lastStatusMessage, left + dp(4f), statusY, totalW, mutedPaint)
+
+        val listTop = statusY + dp(8f)
+        canvas.save()
+        canvas.clipRect(left, listTop, right, bottom)
+
+        modrinthItemRects.clear()
+        val itemH = dp(50f)
+        val gapY = dp(7f)
+        var cy = listTop - pageScrollY
+        for (item in modrinthCatalog) {
+            val r = RectF(left, cy, right, cy + itemH)
+            if (r.bottom >= listTop && r.top <= bottom) {
+                canvas.drawRoundRect(r, dp(8f), dp(8f), cardPaint)
+                canvas.drawRoundRect(r, dp(8f), dp(8f), if (item.isInstalled) activeBorderPaint else borderPaint)
+
+                val btnW = dp(132f)
+                val actRect = RectF(r.right - dp(10f) - btnW, r.top + dp(9f), r.right - dp(10f), r.bottom - dp(9f))
+                val actPaint = when {
+                    item.isEnabled -> accentGreenPaint
+                    item.isInstalled -> accentTerraPaint
+                    else -> accentSlatePaint
+                }
+                canvas.drawRoundRect(actRect, dp(6f), dp(6f), actPaint)
+                val actLabel = when {
+                    item.isEnabled -> "TERPASANG [AKTIF]"
+                    item.isInstalled -> "TERPASANG [OFF]"
+                    else -> "UNDUH & PASANG"
+                }
+                canvas.drawText(actLabel, actRect.centerX(), actRect.centerY() + dp(3.6f), btnTextPaint)
+
+                val textW = totalW - btnW - dp(32f)
+                drawFittedText(
+                    canvas,
+                    "${item.title} (${item.slug})  •  Oleh ${item.author}",
+                    r.left + dp(12f),
+                    r.top + dp(20f),
+                    textW,
+                    bodyBoldPaint
+                )
+                drawFittedText(
+                    canvas,
+                    item.description,
+                    r.left + dp(12f),
+                    r.top + dp(37f),
+                    textW,
+                    mutedPaint
+                )
+                modrinthItemRects.add(item to actRect)
+            }
+            cy += itemH + gapY
+        }
+        pageContentHeight = modrinthCatalog.size * (itemH + gapY)
+        canvas.restore()
     }
 
     // =========================================================================
-    // PAGE 4: KONTROL & HUD (VISUAL HUD EDITOR, KEYBINDER, CURSOR, OVERLAY)
+    // PAGE 4: KONTROL, HUD & SHARE/IMPORT .JSON (SCROLLABLE 3x2 GRID)
     // =========================================================================
     private fun drawControlsAndHudPage(canvas: Canvas, left: Float, top: Float, right: Float, bottom: Float) {
         val totalW = right - left
-        val gap = dp(12f)
+        val gap = dp(10f)
         val cardW = (totalW - gap) * 0.5f
-        val cardH = (bottom - top - gap) * 0.5f
+        val cardH = ((bottom - top - gap * 2f) / 3f).coerceAtLeast(dp(74f))
+
+        val row1Y = top
+        val row2Y = row1Y + cardH + gap
+        val row3Y = row2Y + cardH + gap
 
         val cards = listOf(
             Triple(
-                ctrlVisualHudBtnRect.apply { set(left, top, left + cardW, top + cardH) },
+                ctrlVisualHudBtnRect.apply { set(left, row1Y, left + cardW, row1Y + cardH) },
                 "1. Visual Drag & Drop HUD Editor",
-                "Atur posisi, ukuran, transparansi, serta tambah/hapus tombol langsung di atas layar permainan."
-            ) to "BUKA VISUAL HUD EDITOR",
+                "Geser, ubah ukuran, opasitas, atau tambah tombol langsung di layar."
+            ) to ("BUKA VISUAL HUD EDITOR" to accentGreenPaint),
             Triple(
-                ctrlKeybindModalBtnRect.apply { set(left + cardW + gap, top, right, top + cardH) },
-                "2. Custom Keybind (104 Tombol Keyboard PC & Gamepad)",
-                "Bind tombol HUD bebas ke A-Z, 0-9, F1-F12, Space, Shift, Ctrl, Alt, Tab, Arrow, atau Stik Gamepad."
-            ) to "BUKA KEYBIND KEYBOARD PC",
+                ctrlKeybindModalBtnRect.apply { set(left + cardW + gap, row1Y, right, row1Y + cardH) },
+                "2. Custom Keybind (104 Tombol PC & Gamepad)",
+                "Bind tombol bebas ke A-Z, F1-F12, Mouse, Macro, Keyboard IME, atau Sidebar."
+            ) to ("BUKA KEYBIND KEYBOARD PC" to accentGreenPaint),
             Triple(
-                ctrlSettingsModalBtnRect.apply { set(left, top + cardH + gap, left + cardW, bottom) },
-                "3. Sensitivitas Kamera, Gyro 200Hz & Kursor Virtual",
-                "Atur slider sensitivitas sentuhan, Gyroscope, Auto-Click 14 CPS, FastPlace 15 CPS & Show Cursor."
-            ) to "ATUR SENSITIVITAS & KURSOR",
+                ctrlSettingsModalBtnRect.apply { set(left, row2Y, left + cardW, row2Y + cardH) },
+                "3. Sensitivitas, Gyro 200Hz & Kursor",
+                "Atur sensitivitas kamera, Gyroscope, Auto-Click 14 CPS & 3 Gaya Kursor."
+            ) to ("ATUR SENSITIVITAS & KURSOR" to accentGreenPaint),
             Triple(
-                ctrlOverlayPermBtnRect.apply { set(left + cardW + gap, top + cardH + gap, right, bottom) },
-                "4. Panel Kambang Unduhan (Display Over Other Apps)",
-                "Izinkan panel progres melayang saat Anda berpindah ke aplikasi lain selama mengunduh data."
-            ) to if (FloatingDownloadOverlay.canDrawOverlays(context)) "IZIN OVERLAY: SUDAH AKTIF" else "AKTIFKAN IZIN OVERLAY"
+                ctrlExportShareJsonRect.apply { set(left + cardW + gap, row2Y, right, row2Y + cardH) },
+                "4. Bagikan / Ekspor Kontrol .JSON",
+                "Ekspor tata letak HUD ke file .json dan bagikan ke teman atau komunitas."
+            ) to ("EKSPOR & BAGIKAN .JSON" to accentTerraPaint),
+            Triple(
+                ctrlImportJsonClipRect.apply { set(left, row3Y, left + cardW, row3Y + cardH) },
+                "5. Impor Kontrol .JSON dari Clipboard",
+                "Tempel teks JSON kontrol yang disalin dari teman untuk langsung dipakai."
+            ) to ("IMPOR .JSON DARI CLIPBOARD" to accentSlatePaint),
+            Triple(
+                ctrlOverlayPermBtnRect.apply { set(left + cardW + gap, row3Y, right, row3Y + cardH) },
+                "6. Panel Kambang Unduhan (Overlay)",
+                "Izinkan panel progres melayang saat berpindah aplikasi selama mengunduh."
+            ) to ((if (FloatingDownloadOverlay.canDrawOverlays(context)) "IZIN OVERLAY: SUDAH AKTIF" else "AKTIFKAN IZIN OVERLAY") to accentGreenPaint)
         )
 
-        for ((info, btnLabel) in cards) {
+        for ((info, pair) in cards) {
             val r = info.first
-            canvas.drawRoundRect(r, dp(10f), dp(10f), cardPaint)
-            canvas.drawRoundRect(r, dp(10f), dp(10f), borderPaint)
+            canvas.drawRoundRect(r, dp(9f), dp(9f), cardPaint)
+            canvas.drawRoundRect(r, dp(9f), dp(9f), borderPaint)
 
-            drawFittedText(canvas, info.second, r.left + dp(14f), r.top + dp(24f), r.width() - dp(28f), h2Paint)
-            drawFittedText(canvas, info.third, r.left + dp(14f), r.top + dp(44f), r.width() - dp(28f), mutedPaint)
+            drawFittedText(canvas, info.second, r.left + dp(12f), r.top + dp(19f), r.width() - dp(24f), h2Paint)
+            drawFittedText(canvas, info.third, r.left + dp(12f), r.top + dp(35f), r.width() - dp(24f), mutedPaint)
 
-            val bRect = RectF(r.left + dp(14f), r.bottom - dp(44f), r.right - dp(14f), r.bottom - dp(12f))
-            canvas.drawRoundRect(bRect, dp(7f), dp(7f), accentGreenPaint)
-            canvas.drawText(btnLabel, bRect.centerX(), bRect.centerY() + dp(3.8f), btnTextPaint)
+            val bRect = RectF(r.left + dp(12f), r.bottom - dp(34f), r.right - dp(12f), r.bottom - dp(8f))
+            canvas.drawRoundRect(bRect, dp(6f), dp(6f), pair.second)
+            canvas.drawText(pair.first, bRect.centerX(), bRect.centerY() + dp(3.6f), btnTextPaint)
         }
     }
 
     // =========================================================================
-    // PAGE 5: AKUN PEMAIN (PROFILE CARD + CLEAN ON-SCREEN KEYBOARD)
+    // PAGE 5: AKUN PEMAIN (MICROSOFT OAUTH2 + OFFLINE + SYSTEM IME KEYBOARD)
     // =========================================================================
     private fun drawAccountPage(canvas: Canvas, left: Float, top: Float, right: Float, bottom: Float) {
         val totalW = right - left
-        val session = sessionManager.getActiveSession()
+        val activeAcc = AccountManager.getActiveAccount(context)
+        val isMsaActive = (activeAcc.type == AccountManager.AccountType.MICROSOFT)
+        accountActionRects.clear()
 
-        // Top Profile Summary Card
-        val profH = dp(78f)
+        // 1. Top Active Profile Card
+        val profH = dp(76f)
         tmpRect.set(left, top, right, top + profH)
         canvas.drawRoundRect(tmpRect, dp(10f), dp(10f), cardPaint)
-        canvas.drawRoundRect(tmpRect, dp(10f), dp(10f), borderPaint)
+        canvas.drawRoundRect(tmpRect, dp(10f), dp(10f), activeBorderPaint)
 
         var textX = left + dp(14f)
         mascotBmp?.let { mBmp ->
-            val sz = dp(54f)
+            val sz = dp(52f)
             srcRect.set(0, 0, mBmp.width, mBmp.height)
             dstRect.set(left + dp(12f), top + dp(12f), left + dp(12f) + sz, top + dp(12f) + sz)
             canvas.drawBitmap(mBmp, srcRect, dstRect, bitmapPaint)
@@ -843,65 +1087,107 @@ class MainMenuView @JvmOverloads constructor(
 
         drawFittedText(
             canvas,
-            "Username Saat Ini: ${session.username}   |   Sedang Diedit: $editingUsername",
+            "Akun Aktif: ${activeAcc.username}   |   Tipe: ${activeAcc.type.label}",
             textX,
-            top + dp(28f),
+            top + dp(27f),
             right - textX - dp(16f),
             h2Paint
         )
         drawFittedText(
             canvas,
-            "UUID Offline Konsisten: ${session.uuid} (Maksimal 16 karakter huruf/angka/_)",
+            "UUID Pemain: ${activeAcc.uuid}   |   Input menggunakan Keyboard IME Sistem Android (Tanpa Keyboard Custom)",
             textX,
             top + dp(48f),
             right - textX - dp(16f),
             mutedPaint
         )
 
-        // Clean On-Canvas Keyboard Card
-        val kbTop = top + profH + dp(10f)
-        tmpRect.set(left, kbTop, right, bottom)
+        // 2. Two Side-by-Side Cards: LEFT = Offline Account (IME Keyboard), RIGHT = Microsoft Official OAuth2
+        val bodyTop = top + profH + dp(10f)
+        val colGap = dp(12f)
+        val colW = (totalW - colGap) * 0.5f
+        val rightColL = left + colW + colGap
+
+        // LEFT CARD: OFFLINE ACCOUNT + SYSTEM IME KEYBOARD
+        tmpRect.set(left, bodyTop, left + colW, bottom)
         canvas.drawRoundRect(tmpRect, dp(10f), dp(10f), cardPaint)
-        canvas.drawRoundRect(tmpRect, dp(10f), dp(10f), borderPaint)
+        canvas.drawRoundRect(tmpRect, dp(10f), dp(10f), if (!isMsaActive) activeBorderPaint else borderPaint)
 
-        accountKeyRects.clear()
-        val rows = listOf(
-            "1234567890_",
-            "QWERTYUIOP",
-            "ASDFGHJKL",
-            "ZXCVBNM"
+        val inL = left + dp(14f)
+        val inW = colW - dp(28f)
+        var ly = bodyTop + dp(24f)
+
+        drawFittedText(canvas, "Opsi A: Akun Offline (Lokal / Server Non-Premium)", inL, ly, inW, h2Paint)
+        ly += dp(16f)
+        drawFittedText(canvas, "Ketuk kotak di bawah untuk mengetik Username dengan Keyboard IME Android:", inL, ly, inW, mutedPaint)
+        ly += dp(10f)
+
+        // System IME Input Field Box
+        val imeFieldRect = RectF(inL, ly, inL + inW, ly + dp(40f))
+        canvas.drawRoundRect(imeFieldRect, dp(8f), dp(8f), cardElevatedPaint)
+        canvas.drawRoundRect(imeFieldRect, dp(8f), dp(8f), activeBorderPaint)
+        drawFittedText(
+            canvas,
+            "Username: $editingUsername",
+            imeFieldRect.left + dp(12f),
+            imeFieldRect.centerY() + dp(4f),
+            inW - dp(120f),
+            h2Paint
         )
-        val pad = dp(14f)
-        val areaW = totalW - pad * 2f
-        val availH = (bottom - kbTop) - pad * 2f
-        val rowH = ((availH - dp(20f)) / 5f).coerceIn(dp(26f), dp(38f))
-        var kY = kbTop + pad
+        val kbBadgeRect = RectF(imeFieldRect.right - dp(104f), imeFieldRect.top + dp(6f), imeFieldRect.right - dp(6f), imeFieldRect.bottom - dp(6f))
+        canvas.drawRoundRect(kbBadgeRect, dp(5f), dp(5f), accentSlatePaint)
+        canvas.drawText("KETIK (IME)", kbBadgeRect.centerX(), kbBadgeRect.centerY() + dp(3.5f), btnTextPaint)
+        accountActionRects.add("OPEN_IME_USERNAME" to imeFieldRect)
+        ly += dp(50f)
 
-        for (row in rows) {
-            val keyW = (areaW - dp(5f) * (row.length - 1)) / row.length
-            for ((cIdx, ch) in row.withIndex()) {
-                val kx = left + pad + cIdx * (keyW + dp(5f))
-                val r = RectF(kx, kY, kx + keyW, kY + rowH)
-                canvas.drawRoundRect(r, dp(6f), dp(6f), cardElevatedPaint)
-                canvas.drawRoundRect(r, dp(6f), dp(6f), borderPaint)
-                canvas.drawText(ch.toString(), r.centerX(), r.centerY() + dp(4f), btnTextPaint)
-                accountKeyRects.add(ch.toString() to r)
-            }
-            kY += rowH + dp(5f)
+        val saveOfflineRect = RectF(inL, ly, inL + inW, ly + dp(36f))
+        canvas.drawRoundRect(saveOfflineRect, dp(7f), dp(7f), if (!isMsaActive) accentGreenPaint else cardElevatedPaint)
+        canvas.drawRoundRect(saveOfflineRect, dp(7f), dp(7f), borderPaint)
+        canvas.drawText("SIMPAN & GUNAKAN AKUN OFFLINE", saveOfflineRect.centerX(), saveOfflineRect.centerY() + dp(3.8f), btnTextPaint)
+        accountActionRects.add("SAVE_OFFLINE" to saveOfflineRect)
+
+        // RIGHT CARD: MICROSOFT OFFICIAL OAUTH2 LOGIN
+        tmpRect.set(rightColL, bodyTop, right, bottom)
+        canvas.drawRoundRect(tmpRect, dp(10f), dp(10f), cardPaint)
+        canvas.drawRoundRect(tmpRect, dp(10f), dp(10f), if (isMsaActive) activeBorderPaint else borderPaint)
+
+        val rInL = rightColL + dp(14f)
+        val rInW = colW - dp(28f)
+        var ry = bodyTop + dp(24f)
+
+        drawFittedText(canvas, "Opsi B: Akun Microsoft Resmi (Xbox Live / Mojang)", rInL, ry, rInW, h2Paint)
+        ry += dp(16f)
+        drawFittedText(canvas, AccountManager.msaAuthStatusText, rInL, ry, rInW, bodyPaint)
+        ry += dp(10f)
+
+        val code = AccountManager.activeDeviceCode
+        if (code.isNotBlank()) {
+            val codeBox = RectF(rInL, ry, rInL + rInW, ry + dp(34f))
+            canvas.drawRoundRect(codeBox, dp(7f), dp(7f), cardElevatedPaint)
+            canvas.drawRoundRect(codeBox, dp(7f), dp(7f), activeBorderPaint)
+            canvas.drawText("KODE LOGIN MICROSOFT: $code (Tersalin ke Clipboard)", codeBox.centerX(), codeBox.centerY() + dp(4f), btnTextPaint)
+            accountActionRects.add("COPY_OPEN_MSA" to codeBox)
+            ry += dp(42f)
         }
 
-        val halfW = (areaW - dp(10f)) * 0.5f
-        val bkRect = RectF(left + pad, kY, left + pad + halfW, kY + rowH)
-        val saveRect = RectF(bkRect.right + dp(10f), kY, right - pad, kY + rowH)
+        val startMsaRect = RectF(rInL, ry, rInL + rInW, ry + dp(36f))
+        canvas.drawRoundRect(startMsaRect, dp(7f), dp(7f), accentGreenPaint)
+        canvas.drawText(
+            if (AccountManager.isPollingMsa) "BUKA BROWSER MICROSOFT.COM/LINK" else "LOGIN AKUN MICROSOFT RESMI (OAUTH2)",
+            startMsaRect.centerX(),
+            startMsaRect.centerY() + dp(3.8f),
+            btnTextPaint
+        )
+        accountActionRects.add("START_MSA_LOGIN" to startMsaRect)
+        ry += dp(44f)
 
-        canvas.drawRoundRect(bkRect, dp(7f), dp(7f), accentTerraPaint)
-        canvas.drawText("HAPUS KARAKTER [BACKSPACE]", bkRect.centerX(), bkRect.centerY() + dp(4f), btnTextPaint)
-
-        canvas.drawRoundRect(saveRect, dp(7f), dp(7f), accentGreenPaint)
-        canvas.drawText("SIMPAN USERNAME BARU", saveRect.centerX(), saveRect.centerY() + dp(4f), btnTextPaint)
-
-        accountKeyRects.add("BACKSPACE" to bkRect)
-        accountKeyRects.add("SAVE_USER" to saveRect)
+        if (AccountManager.hasSavedMicrosoftAccount(context) || AccountManager.isPollingMsa) {
+            val secRect = RectF(rInL, ry, rInL + rInW, ry + dp(32f))
+            canvas.drawRoundRect(secRect, dp(7f), dp(7f), accentTerraPaint)
+            val secLabel = if (AccountManager.isPollingMsa) "BATALKAN PROSES LOGIN" else "KELUAR (LOGOUT) AKUN MICROSOFT"
+            canvas.drawText(secLabel, secRect.centerX(), secRect.centerY() + dp(3.8f), btnTextPaint)
+            accountActionRects.add("MSA_SECONDARY" to secRect)
+        }
     }
 
     // =========================================================================
@@ -955,22 +1241,38 @@ class MainMenuView @JvmOverloads constructor(
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 lastTouchY = y
+                touchDownY = y
+                isDraggingScroll = false
                 if (activePage == NavPage.MEMORY_ENGINE && ramSliderRect.contains(x, y)) {
                     handleRamSliderDrag(x)
                 }
             }
             MotionEvent.ACTION_MOVE -> {
+                val dy = lastTouchY - y
+                if (kotlin.math.abs(y - touchDownY) > dp(8f)) {
+                    isDraggingScroll = true
+                }
                 if (activePage == NavPage.MEMORY_ENGINE && ramSliderRect.contains(x, y)) {
                     handleRamSliderDrag(x)
                 } else if (activePage == NavPage.LOGS) {
-                    val dy = lastTouchY - y
                     lastTouchY = y
                     val maxScroll = max(0f, logLines.size * dp(14f) - (height * 0.6f))
                     logScrollY = (logScrollY + dy).coerceIn(0f, maxScroll)
                     postInvalidateOnAnimation()
+                } else if (activePage == NavPage.MODS_SHADERS) {
+                    lastTouchY = y
+                    val maxScroll = max(0f, pageContentHeight - (height * 0.55f))
+                    pageScrollY = (pageScrollY + dy).coerceIn(0f, maxScroll)
+                    postInvalidateOnAnimation()
                 }
             }
             MotionEvent.ACTION_UP -> {
+                if (isDraggingScroll && (activePage == NavPage.LOGS || activePage == NavPage.MODS_SHADERS)) {
+                    isDraggingScroll = false
+                    return true
+                }
+                isDraggingScroll = false
+
                 // Check Left Navigation Sidebar first
                 for ((idx, r) in navRects.withIndex()) {
                     if (r.contains(x, y)) {
@@ -1068,30 +1370,89 @@ class MainMenuView @JvmOverloads constructor(
     }
 
     private fun handleModsShadersTap(x: Float, y: Float) {
-        when {
-            shaderToggleRect.contains(x, y) -> {
-                val next = !RendererProfileManager.isShaderSupportEnabled(context)
-                RendererProfileManager.setShaderSupportEnabled(context, next)
+        if (modsSubTabLocalRect.contains(x, y)) {
+            isModrinthOnlineTab = false
+            pageScrollY = 0f
+            return
+        }
+        if (modsSubTabModrinthRect.contains(x, y)) {
+            isModrinthOnlineTab = true
+            pageScrollY = 0f
+            if (modrinthCatalog.isEmpty() && !ModrinthSyncManager.isLoading) {
+                triggerModrinthFetch(modrinthQuery)
             }
-            shaderCycleRect.contains(x, y) -> {
-                val nextPack = RendererProfileManager.cycleActiveShaderpack(context)
-                showBannerMessage("Shaderpack dipilih: $nextPack")
-            }
-            shaderSyncRect.contains(x, y) -> {
-                val provisioner = DirectBootProvisioner(context)
-                val count = RendererProfileManager.syncExternalShaderpacks(context, provisioner.gameDir)
-                showBannerMessage("Sinkronisasi selesai: $count file .zip shader ditemukan.")
-            }
-            else -> {
-                for ((slug, r) in modCardRects) {
-                    if (r.contains(x, y)) {
-                        if (slug == "fabric-api") {
-                            showBannerMessage("Fabric API adalah pustaka inti wajib dan selalu aktif.")
-                        } else {
-                            val nowOn = RendererProfileManager.toggleModEnabled(context, slug)
-                            showBannerMessage("Mod '$slug' diatur ke: ${if (nowOn) "AKTIF" else "NONAKTIF"}")
+            return
+        }
+
+        if (!isModrinthOnlineTab) {
+            when {
+                shaderToggleRect.contains(x, y) -> {
+                    val next = !RendererProfileManager.isShaderSupportEnabled(context)
+                    RendererProfileManager.setShaderSupportEnabled(context, next)
+                }
+                shaderCycleRect.contains(x, y) -> {
+                    val nextPack = RendererProfileManager.cycleActiveShaderpack(context)
+                    showBannerMessage("Shaderpack dipilih: $nextPack")
+                }
+                shaderSyncRect.contains(x, y) -> {
+                    val provisioner = DirectBootProvisioner(context)
+                    val count = RendererProfileManager.syncExternalShaderpacks(context, provisioner.gameDir)
+                    showBannerMessage("Sinkronisasi selesai: $count file .zip shader ditemukan.")
+                }
+                else -> {
+                    for ((slug, r) in modCardRects) {
+                        if (r.contains(x, y)) {
+                            if (slug == "fabric-api") {
+                                showBannerMessage("Fabric API adalah pustaka inti wajib dan selalu aktif.")
+                            } else {
+                                val nowOn = RendererProfileManager.toggleModEnabled(context, slug)
+                                showBannerMessage("Mod '$slug' diatur ke: ${if (nowOn) "AKTIF" else "NONAKTIF"}")
+                            }
+                            return
                         }
-                        return
+                    }
+                }
+            }
+        } else {
+            when {
+                modrinthSearchInputRect.contains(x, y) -> {
+                    SystemImeHelper.requestTextInput(
+                        label = "Cari Mod Modrinth 1.20.4",
+                        initialText = modrinthQuery,
+                        maxLength = 42,
+                        onChanged = { q ->
+                            modrinthQuery = q
+                            postInvalidateOnAnimation()
+                        },
+                        onSubmitted = { q ->
+                            modrinthQuery = q
+                            triggerModrinthFetch(q)
+                        }
+                    )
+                }
+                modrinthSearchBtnRect.contains(x, y) -> {
+                    triggerModrinthFetch(modrinthQuery)
+                }
+                modrinthSyncAllBtnRect.contains(x, y) -> {
+                    modrinthQuery = ""
+                    triggerModrinthFetch("")
+                }
+                else -> {
+                    for ((item, r) in modrinthItemRects) {
+                        if (r.contains(x, y)) {
+                            if (item.isInstalled) {
+                                val nowOn = ModrinthSyncManager.toggleInstalledMod(context, item.slug)
+                                triggerModrinthFetch(modrinthQuery)
+                                showBannerMessage("Mod '${item.title}' diatur ke: ${if (nowOn) "AKTIF" else "NONAKTIF"}")
+                            } else {
+                                showBannerMessage("Mengunduh '${item.title}' dari Modrinth API v2...")
+                                ModrinthSyncManager.installOrUpdateModAsync(context, item) { ok, msg ->
+                                    showBannerMessage(msg)
+                                    if (ok) triggerModrinthFetch(modrinthQuery)
+                                }
+                            }
+                            return
+                        }
                     }
                 }
             }
@@ -1103,27 +1464,69 @@ class MainMenuView @JvmOverloads constructor(
             ctrlVisualHudBtnRect.contains(x, y) -> onOpenVisualHudEditor?.invoke()
             ctrlKeybindModalBtnRect.contains(x, y) -> onOpenRendererAndKeybindModal?.invoke()
             ctrlSettingsModalBtnRect.contains(x, y) -> onOpenQuickSettings?.invoke()
+            ctrlExportShareJsonRect.contains(x, y) -> {
+                val buttons = ControlProfileManager.loadOrCreateProfile(context).buttons
+                val outPath = ControlProfileManager.exportAndShareLayoutJson(
+                    context,
+                    buttons,
+                    "kontrol-xyverse-pro",
+                    openShareSheet = true
+                )
+                showBannerMessage("Kontrol .json diekspor & dibagikan: $outPath")
+            }
+            ctrlImportJsonClipRect.contains(x, y) -> {
+                val (ok, msg) = ControlProfileManager.importLayoutFromClipboard(context)
+                if (ok) onControlJsonReloadRequested?.invoke()
+                showBannerMessage(msg)
+            }
             ctrlOverlayPermBtnRect.contains(x, y) -> onRequestOverlayPermission?.invoke()
         }
     }
 
     private fun handleAccountTap(x: Float, y: Float) {
-        for ((key, r) in accountKeyRects) {
+        for ((action, r) in accountActionRects) {
             if (r.contains(x, y)) {
-                when (key) {
-                    "BACKSPACE" -> {
-                        if (editingUsername.isNotEmpty()) {
-                            editingUsername = editingUsername.dropLast(1)
+                when (action) {
+                    "OPEN_IME_USERNAME" -> {
+                        SystemImeHelper.requestTextInput(
+                            label = "Username Pemain Offline",
+                            initialText = editingUsername,
+                            maxLength = 16,
+                            onChanged = { updated ->
+                                editingUsername = updated.replace(Regex("[^a-zA-Z0-9_]"), "")
+                                postInvalidateOnAnimation()
+                            },
+                            onSubmitted = { submitted ->
+                                val clean = submitted.replace(Regex("[^a-zA-Z0-9_]"), "")
+                                val acc = AccountManager.setOfflineAccount(context, clean)
+                                sessionManager.saveOfflineSession(acc.username)
+                                editingUsername = acc.username
+                                showBannerMessage("Username Offline disimpan via Keyboard IME: ${acc.username}")
+                            }
+                        )
+                    }
+                    "SAVE_OFFLINE" -> {
+                        val acc = AccountManager.setOfflineAccount(context, editingUsername)
+                        sessionManager.saveOfflineSession(acc.username)
+                        editingUsername = acc.username
+                        showBannerMessage("Akun Offline diaktifkan: ${acc.username} (UUID: ${acc.uuid.take(8)}...)")
+                    }
+                    "START_MSA_LOGIN", "COPY_OPEN_MSA" -> {
+                        AccountManager.setAccountMode(context, AccountManager.AccountType.MICROSOFT)
+                        if (AccountManager.isPollingMsa && AccountManager.activeVerificationUri.isNotBlank()) {
+                            AccountManager.openVerificationBrowser(context)
+                        } else {
+                            AccountManager.startMicrosoftLoginFlow(context, openBrowserImmediately = true) {
+                                postInvalidateOnAnimation()
+                            }
                         }
                     }
-                    "SAVE_USER" -> {
-                        val saved = sessionManager.saveOfflineSession(editingUsername)
-                        editingUsername = saved.username
-                        showBannerMessage("Username disimpan: ${saved.username}")
-                    }
-                    else -> {
-                        if (editingUsername.length < 16) {
-                            editingUsername += key
+                    "MSA_SECONDARY" -> {
+                        if (AccountManager.isPollingMsa) {
+                            AccountManager.cancelPolling()
+                        } else {
+                            AccountManager.logoutMicrosoftAccount(context)
+                            showBannerMessage("Akun Microsoft dikeluarkan. Beralih ke Akun Offline.")
                         }
                     }
                 }

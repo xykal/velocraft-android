@@ -92,11 +92,10 @@ public final class VeloCraftBridgeMod implements PreLaunchEntrypoint, ClientModI
             Class.forName("org.lwjgl.glfw.GLFW", true, cl);
             Class<?> memUtil = Class.forName("org.lwjgl.system.MemoryUtil", true, cl);
             Class.forName("org.lwjgl.system.MemoryUtil$LazyInit", true, cl);
-            long ptr = (Long) memUtil.getMethod("memAllocAddress", int.class).invoke(null, 64);
-            memUtil.getMethod("nmemFree", long.class).invoke(null, ptr);
+            java.nio.ByteBuffer bb = (java.nio.ByteBuffer) memUtil.getMethod("memAlloc", int.class).invoke(null, 64);
+            memUtil.getMethod("memFree", java.nio.Buffer.class).invoke(null, bb);
             lwjglBootstrapped = true;
-            logRaw(stageLabel + ": LWJGL 3 Library, GLFW & MemoryUtil (StdlibAllocator) SIAP di KnotClassLoader (ptr=0x" +
-                Long.toHexString(ptr) + ").");
+            logRaw(stageLabel + ": LWJGL 3 Library, GLFW & MemoryUtil (StdlibAllocator) SIAP di KnotClassLoader.");
         } catch (Throwable t) {
             logThrowableChain(stageLabel + "/LWJGL-Bootstrap", t);
         }
