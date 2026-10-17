@@ -156,7 +156,7 @@ class ProHudOverlayView @JvmOverloads constructor(
         isEditMode = false
         draggingButton = null
         selectedEditButton = null
-        ControlProfileManager.saveButtons(context, buttons)
+        ControlProfileManager.saveLayout(context, buttons)
         onExitHudEditor?.invoke()
         postInvalidateOnAnimation()
     }

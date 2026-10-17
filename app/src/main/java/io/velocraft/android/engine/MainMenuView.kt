@@ -1459,7 +1459,7 @@ class MainMenuView @JvmOverloads constructor(
             ctrlKeybindModalBtnRect.contains(x, y) -> onOpenRendererAndKeybindModal?.invoke()
             ctrlSettingsModalBtnRect.contains(x, y) -> onOpenQuickSettings?.invoke()
             ctrlExportShareJsonRect.contains(x, y) -> {
-                val buttons = ControlProfileManager.loadButtons(context)
+                val buttons = ControlProfileManager.loadLayout(context)
                 val outPath = ControlProfileManager.exportAndShareLayoutJson(
                     context,
                     buttons,
