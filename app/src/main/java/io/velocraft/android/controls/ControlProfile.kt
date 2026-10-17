@@ -550,7 +550,7 @@ object ControlProfileManager {
         }
 
         lastShareStatusMessage = "Diekspor ke: ${outFile.absolutePath} (& disalin ke Clipboard)"
-        VeloLogger.info("CONTROLS-JSON", "Control profile exported to ${outFile.absolutePath}")
+        VeloLogger.section("CONTROLS", "Control profile exported to ${outFile.absolutePath}")
 
         if (openShareSheet) {
             try {
@@ -571,7 +571,7 @@ object ControlProfileManager {
                 }
                 context.startActivity(chooser)
             } catch (e: Exception) {
-                VeloLogger.warn("CONTROLS-JSON", "Share sheet fallback to text: ${e.message}")
+                VeloLogger.warn("Share sheet fallback to text: ${e.message}")
             }
         }
 
