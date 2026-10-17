@@ -53,7 +53,8 @@ object RuntimeExtractor {
         apkLibDir.listFiles()?.forEach { soFile ->
             if (soFile.name.endsWith(".so")) {
                 val dest = File(nativesDir, soFile.name)
-                if (!dest.exists() || dest.length() != soFile.length()) {
+                val isCoreBridge = soFile.name.startsWith("libvelocraft")
+                if (isCoreBridge || !dest.exists() || dest.length() != soFile.length()) {
                     soFile.copyTo(dest, overwrite = true)
                     dest.setExecutable(true, false)
                     dest.setReadable(true, false)

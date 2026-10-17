@@ -246,16 +246,17 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
         // immediately restore the in-game view without relogging!
         val nativeTelemetry = NativeEngineBridge.getBootTelemetry()
         val nativeStage = nativeTelemetry?.stageIndex ?: 1
+        val nativeSwaps = nativeTelemetry?.swapBuffersCount ?: 0
         if (jvmRunningInProcess || nativeStage >= 3) {
             jvmRunningInProcess = true
             mainMenuView.visibility = View.GONE
             proHudOverlay.visibility = View.VISIBLE
-            if (nativeStage < 10) {
+            if (nativeSwaps <= 0 && nativeStage < 10) {
                 bootLogOverlay.startBootMonitoring()
             } else {
                 bootLogOverlay.visibility = View.GONE
             }
-            VeloLogger.section("BOOT", "Resumed existing active JVM session without relog (stage=$nativeStage).")
+            VeloLogger.section("BOOT", "Resumed existing active JVM session without relog (stage=$nativeStage, swaps=$nativeSwaps).")
         }
 
         // Prevent Android Back Gesture / Button from finishing GameActivity while in-game
@@ -355,7 +356,15 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
     override fun surfaceCreated(holder: SurfaceHolder) {
         val frame = holder.surfaceFrame
-        VeloLogger.section("RENDERER", "SurfaceView surfaceCreated (${frame.width()}x${frame.height()}), jvmRunning=$jvmRunningInProcess.")
+        PerformanceBooster.applySavedResolutionScaleToEngine(this)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                holder.surface.setFrameRate(120f, android.view.Surface.FRAME_RATE_COMPATIBILITY_DEFAULT)
+            } catch (_: Throwable) {
+            }
+        }
+        val scalePct = (PerformanceBooster.getResolutionScale(this) * 100f).toInt()
+        VeloLogger.section("RENDERER", "SurfaceView surfaceCreated (${frame.width()}x${frame.height()}, C++ Scale=${scalePct}%), jvmRunning=$jvmRunningInProcess.")
         NativeEngineBridge.setSurface(holder.surface, frame.width(), frame.height())
         if (!jvmRunningInProcess) {
             mainMenuView.refreshState()
@@ -440,6 +449,8 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
                     includeFullMusicAssets = !ResumableDownloadEngine.isSkipMusicLiteEnabled(this)
                 )
                 PerformanceBooster.syncBoostSettingsToOptionsTxt(this@GameActivity)
+                PerformanceBooster.applySavedResolutionScaleToEngine(this@GameActivity)
+                NativeEngineBridge.triggerTurboBoost()
                 val syncedShaders = RendererProfileManager.syncExternalShaderpacks(this, provisioner.gameDir)
                 VeloLogger.section(
                     "STAGE-1",
@@ -520,14 +531,19 @@ class GameActivity : AppCompatActivity(), SurfaceHolder.Callback {
         try {
             window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                val highestMode = display?.supportedModes?.maxByOrNull { it.refreshRate }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                @Suppress("DEPRECATION")
+                val disp = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) display else windowManager.defaultDisplay
+                val highestMode = disp?.supportedModes?.maxByOrNull { it.refreshRate }
                 if (highestMode != null) {
                     val params = window.attributes
                     params.preferredDisplayModeId = highestMode.modeId
+                    params.preferredRefreshRate = highestMode.refreshRate
                     window.attributes = params
                 }
+            }
 
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 window.insetsController?.let { controller ->
                     controller.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
                     controller.systemBarsBehavior =

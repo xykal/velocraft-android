@@ -41,16 +41,23 @@ class ProHudOverlayView @JvmOverloads constructor(
 ) : View(context, attrs) {
 
     enum class SidebarSection(val shortTitle: String, val headerTitle: String) {
-        CONTROLS_HUD("KONTROL", "PENGATURAN KONTROL & HUD LENGKAP"),
-        SHARE_JSON("JSON", "BAGIKAN, EKSPOR & IMPOR KONTROL (.JSON)"),
-        MODRINTH_SYNC("MODRINTH", "SINKRONISASI & UNDUH MODS MODRINTH"),
-        IME_SHORTCUTS("KEYBOARD", "KEYBOARD IME SISTEM & PINTASAN CEPAT"),
-        TELEMETRY_LOG("BOOST", "BOOST FPS, RAM & KONSOL LOG BOOT")
+        CONTROLS_HUD("OPASITAS", "ATUR OPASITAS, UKURAN & KONTROL 60/120HZ"),
+        TELEMETRY_LOG("TURBO C++", "TURBO FPS REDMI A2 (C++ .SO) & LOG BOOT"),
+        SHARE_JSON("BAGI HUD", "BAGIKAN, EKSPOR & IMPOR KONTROL (.JSON)"),
+        MODRINTH_SYNC("PASANG MOD", "UNDUH & KELOLA MOD MINECRAFT 1.20.4"),
+        IME_SHORTCUTS("KEYBOARD", "KEYBOARD ANDROID & PINTASAN CEPAT")
     }
 
     private data class SidebarActionHit(
         val rect: RectF,
         val action: () -> Unit
+    )
+
+    private data class SidebarSliderHit(
+        val rect: RectF,
+        val minVal: Float,
+        val maxVal: Float,
+        val onValue: (Float) -> Unit
     )
 
     private val prefs = context.getSharedPreferences("velocraft_hud_studio_prefs", Context.MODE_PRIVATE)
@@ -69,13 +76,22 @@ class ProHudOverlayView @JvmOverloads constructor(
     private var downLookY: Float = 0f
     private var downLookTimestamp: Long = 0L
 
-    var touchLookSensitivity: Float = prefs.getFloat("touch_look_sens", 0.65f)
+    var touchLookSensitivity: Float = prefs.getFloat("touch_look_sens", 0.90f)
         set(value) {
-            field = value.coerceIn(0.15f, 2.0f)
+            field = value.coerceIn(0.15f, 3.0f)
             prefs.edit().putFloat("touch_look_sens", field).apply()
         }
 
-    var cursorSpeedMultiplier: Float = prefs.getFloat("cursor_speed_mult", 1.25f)
+    var globalHudOpacity: Float = prefs.getFloat(
+        "global_hud_opacity",
+        buttons.firstOrNull()?.opacity ?: 0.78f
+    ).coerceIn(0.08f, 1.0f)
+        set(value) {
+            field = value.coerceIn(0.08f, 1.0f)
+            prefs.edit().putFloat("global_hud_opacity", field).apply()
+        }
+
+    var cursorSpeedMultiplier: Float = prefs.getFloat("cursor_speed_mult", 1.35f)
         set(value) {
             field = value.coerceIn(0.5f, 2.5f)
             prefs.edit().putFloat("cursor_speed_mult", field).apply()
@@ -116,13 +132,16 @@ class ProHudOverlayView @JvmOverloads constructor(
     private var activeSidebarSection: SidebarSection = SidebarSection.CONTROLS_HUD
     private var sidebarScrollY: Float = 0f
     private var sidebarMaxScrollY: Float = 0f
+    private var sidebarTouchDownX: Float = 0f
     private var sidebarTouchDownY: Float = 0f
     private var sidebarTouchLastY: Float = 0f
     private var sidebarIsDraggingScroll: Boolean = false
+    private var activeDraggingSidebarSlider: SidebarSliderHit? = null
     private val sidebarPanelRect = RectF()
     private val sidebarCloseRect = RectF()
     private val sidebarNavRects = Array(SidebarSection.values().size) { RectF() }
     private val sidebarActionHits = mutableListOf<SidebarActionHit>()
+    private val sidebarSliderHits = mutableListOf<SidebarSliderHit>()
     private var customJsonProfileName: String = prefs.getString("custom_json_name", "kontrol-xyverse-pro") ?: "kontrol-xyverse-pro"
 
     // Maximized Top Telemetry Bar Hit Rects
@@ -174,7 +193,7 @@ class ProHudOverlayView @JvmOverloads constructor(
         postInvalidateOnAnimation()
     }
 
-    // Editor 2-Row Studio Dock Hit Rects
+    // Editor 3-Row Studio Dock Hit Rects (including interactive Opacity & Size Sliders)
     private val editAddKeyRect = RectF()
     private val editDuplicateRect = RectF()
     private val editShapeCycleRect = RectF()
@@ -186,6 +205,11 @@ class ProHudOverlayView @JvmOverloads constructor(
     private val editOpacityPlusRect = RectF()
     private val editDeleteKeyRect = RectF()
     private val editSaveHudRect = RectF()
+    private val editOpacitySliderRect = RectF()
+    private val editSizeSliderRect = RectF()
+    private val editApplyAllOpacityRect = RectF()
+    private var editorDraggingOpacitySlider = false
+    private var editorDraggingSizeSlider = false
 
     // PvP Combat Automation & CPS Counter
     val macroEngine = MacroEngine()
@@ -353,9 +377,30 @@ class ProHudOverlayView @JvmOverloads constructor(
         postInvalidateOnAnimation()
     }
 
-    fun adjustAllButtonsOpacity(delta: Float) {
+    fun setAllButtonsRadiusDp(targetRadiusDp: Float) {
+        val clamped = targetRadiusDp.coerceIn(14f, 60f)
         buttons.forEach { btn ->
-            btn.opacity = (btn.opacity + delta).coerceIn(0.20f, 1.0f)
+            btn.radiusDp = clamped
+        }
+        ControlProfileManager.saveLayout(context, buttons)
+        postInvalidateOnAnimation()
+    }
+
+    fun getAverageButtonRadiusDp(): Float {
+        if (buttons.isEmpty()) return 24f
+        return buttons.map { it.radiusDp }.average().toFloat().coerceIn(14f, 60f)
+    }
+
+    fun adjustAllButtonsOpacity(delta: Float) {
+        val next = (globalHudOpacity + delta).coerceIn(0.08f, 1.0f)
+        setAllButtonsOpacity(next)
+    }
+
+    fun setAllButtonsOpacity(targetOpacity: Float) {
+        val clamped = targetOpacity.coerceIn(0.08f, 1.0f)
+        globalHudOpacity = clamped
+        buttons.forEach { btn ->
+            btn.opacity = clamped
         }
         ControlProfileManager.saveLayout(context, buttons)
         postInvalidateOnAnimation()
@@ -513,7 +558,7 @@ class ProHudOverlayView @JvmOverloads constructor(
                 (btn.actionType == ActionType.CURSOR_TOGGLE && isCursorEffective) ||
                 (btn.actionType == ActionType.SIDEBAR_DRAWER_TOGGLE && isSidebarDrawerOpen)
             val isSelectedInEditor = isEditMode && selectedEditButton?.id == btn.id
-            val effectiveOpacity = if (!btn.isVisible && isEditMode) 0.30f else btn.opacity
+            val effectiveOpacity = (if (!btn.isVisible && isEditMode) 0.28f else btn.opacity).coerceIn(0.08f, 1.0f)
 
             val halfW = when (btn.shape) {
                 ButtonShape.PILL -> r * 1.38f
@@ -529,8 +574,8 @@ class ProHudOverlayView @JvmOverloads constructor(
                 ButtonShape.PILL -> halfH
             }
 
-            // 1. Outer shadow/backing frame
-            bgFillPaint.color = modulateAlpha(0xFF10100E.toInt(), (effectiveOpacity * 0.48f).coerceAtMost(0.68f))
+            // 1. Outer shadow/backing frame (scales with effectiveOpacity)
+            bgFillPaint.color = modulateAlpha(0xFF10100E.toInt(), (effectiveOpacity * 0.48f).coerceIn(0.04f, 0.68f))
             tmpBtnRect.set(cx - halfW - dp(1.8f), cy - halfH - dp(1.8f), cx + halfW + dp(1.8f), cy + halfH + dp(1.8f))
             if (btn.shape == ButtonShape.CIRCLE) {
                 canvas.drawCircle(cx, cy, r + dp(1.8f), bgFillPaint)
@@ -538,11 +583,11 @@ class ProHudOverlayView @JvmOverloads constructor(
                 canvas.drawRoundRect(tmpBtnRect, cornerRad + dp(1.5f), cornerRad + dp(1.5f), bgFillPaint)
             }
 
-            // 2. Main matte button surface
+            // 2. Main matte button surface (scales with effectiveOpacity)
             bgFillPaint.color = if (isPressed) {
-                modulateAlpha(btn.accentHex, 0.82f)
+                modulateAlpha(btn.accentHex, (effectiveOpacity + 0.22f).coerceIn(0.20f, 0.92f))
             } else {
-                modulateAlpha(0xFF1B1A18.toInt(), effectiveOpacity * 0.84f)
+                modulateAlpha(0xFF1B1A18.toInt(), (effectiveOpacity * 0.85f).coerceIn(0.06f, 0.90f))
             }
             tmpBtnRect.set(cx - halfW, cy - halfH, cx + halfW, cy + halfH)
             if (btn.shape == ButtonShape.CIRCLE) {
@@ -551,11 +596,11 @@ class ProHudOverlayView @JvmOverloads constructor(
                 canvas.drawRoundRect(tmpBtnRect, cornerRad, cornerRad, bgFillPaint)
             }
 
-            // 3. Subtle inner bevel ring
+            // 3. Subtle inner bevel ring (scales with effectiveOpacity)
             strokePaint.color = if (isPressed) {
-                0x55FFFFFF
+                modulateAlpha(0xFFFFFFFF.toInt(), (effectiveOpacity * 0.45f).coerceIn(0.10f, 0.55f))
             } else {
-                modulateAlpha(btn.accentHex, 0.32f)
+                modulateAlpha(btn.accentHex, (effectiveOpacity * 0.35f).coerceIn(0.04f, 0.45f))
             }
             strokePaint.strokeWidth = dp(1f)
             val inset = dp(3.2f)
@@ -566,11 +611,11 @@ class ProHudOverlayView @JvmOverloads constructor(
                 canvas.drawRoundRect(tmpBtnRect, (cornerRad - dp(2f)).coerceAtLeast(dp(3f)), (cornerRad - dp(2f)).coerceAtLeast(dp(3f)), strokePaint)
             }
 
-            // 4. Outer crisp stroke ring
+            // 4. Outer crisp stroke ring (scales with effectiveOpacity unless selected in editor)
             strokePaint.color = when {
                 isSelectedInEditor -> 0xFFF4F1EA.toInt()
-                isPressed -> 0xFFF4F1EA.toInt()
-                else -> modulateAlpha(btn.accentHex, 0.90f)
+                isPressed -> modulateAlpha(0xFFF4F1EA.toInt(), (effectiveOpacity + 0.25f).coerceIn(0.25f, 1.0f))
+                else -> modulateAlpha(btn.accentHex, (effectiveOpacity * 0.92f).coerceIn(0.08f, 0.95f))
             }
             strokePaint.strokeWidth = if (isSelectedInEditor || isPressed) dp(2.2f) else dp(1.4f)
             tmpBtnRect.set(cx - halfW, cy - halfH, cx + halfW, cy + halfH)
@@ -580,7 +625,7 @@ class ProHudOverlayView @JvmOverloads constructor(
                 canvas.drawRoundRect(tmpBtnRect, cornerRad, cornerRad, strokePaint)
             }
 
-            // 5. Auto-fitted button label
+            // 5. Auto-fitted button label (scales with effectiveOpacity)
             textPaint.textSize = when {
                 btn.label.length >= 8 -> dp(8.8f)
                 btn.label.length >= 6 -> dp(9.8f)
@@ -591,8 +636,14 @@ class ProHudOverlayView @JvmOverloads constructor(
             while (textPaint.measureText(labelStr) > maxLabelW && textPaint.textSize > dp(7.2f)) {
                 textPaint.textSize -= dp(0.5f)
             }
+            textPaint.color = if (isSelectedInEditor) {
+                0xFFF4F1EA.toInt()
+            } else {
+                modulateAlpha(0xFFF4F1EA.toInt(), (effectiveOpacity + 0.08f).coerceIn(0.12f, 1.0f))
+            }
             val textY = cy - (textPaint.descent() + textPaint.ascent()) / 2f
             canvas.drawText(labelStr, cx, textY, textPaint)
+            textPaint.color = 0xFFF4F1EA.toInt()
         }
 
         if (isEditMode) {
@@ -837,6 +888,7 @@ class ProHudOverlayView @JvmOverloads constructor(
      */
     private fun drawSlideOutSidebarDrawer(canvas: Canvas, w: Float, h: Float) {
         sidebarActionHits.clear()
+        sidebarSliderHits.clear()
 
         // Subtle right-side scrim so the game world stays visible
         bgFillPaint.color = 0x880C0C0B.toInt()
@@ -965,12 +1017,106 @@ class ProHudOverlayView @JvmOverloads constructor(
         var y = startY
         val halfW = (width - dp(8f)) * 0.5f
 
-        // Row 1: Edit HUD Position & Studio Keybind Modal
+        // 1. Interactive Draggable Slider: OPASITAS / TRANSPARANSI TOMBOL HUD (8% - 100%)
+        val curOpPct = (globalHudOpacity * 100f).roundToInt().coerceIn(8, 100)
+        y = drawSidebarSliderCard(
+            canvas = canvas,
+            left = left,
+            y = y,
+            width = width,
+            title = "OPASITAS / TRANSPARANSI TOMBOL HUD",
+            valueBadge = "$curOpPct%",
+            subtitle = "Geser bar ke kiri agar tombol transparan, atau ke kanan agar tegas",
+            currentVal = globalHudOpacity,
+            minVal = 0.08f,
+            maxVal = 1.00f,
+            accentColor = 0xFF4E8C57.toInt(),
+            onStepMinus = { adjustAllButtonsOpacity(-0.08f) },
+            onStepPlus = { adjustAllButtonsOpacity(+0.08f) },
+            onSlideValue = { newOp -> setAllButtonsOpacity(newOp) },
+            clipTop = clipTop,
+            clipBottom = clipBottom
+        )
+
+        // 2. Interactive Draggable Slider: UKURAN SELURUH TOMBOL HUD (14dp - 56dp)
+        val avgRad = getAverageButtonRadiusDp()
+        y = drawSidebarSliderCard(
+            canvas = canvas,
+            left = left,
+            y = y,
+            width = width,
+            title = "UKURAN TOMBOL KONTROL HUD",
+            valueBadge = "${avgRad.roundToInt()} dp",
+            subtitle = "Geser untuk mengecilkan atau membesarkan seluruh tombol layar",
+            currentVal = avgRad,
+            minVal = 14f,
+            maxVal = 56f,
+            accentColor = 0xFF5A7D9A.toInt(),
+            onStepMinus = { scaleAllButtons(-2.5f) },
+            onStepPlus = { scaleAllButtons(+2.5f) },
+            onSlideValue = { newRad -> setAllButtonsRadiusDp(newRad) },
+            clipTop = clipTop,
+            clipBottom = clipBottom
+        )
+
+        // 3. Interactive Draggable Slider: SENSITIVITAS GESER KAMERA 60/120Hz (15% - 300%)
+        val sensPct = (touchLookSensitivity * 100f).roundToInt()
+        y = drawSidebarSliderCard(
+            canvas = canvas,
+            left = left,
+            y = y,
+            width = width,
+            title = "SENSITIVITAS GESER KAMERA (60/120Hz)",
+            valueBadge = "$sensPct%",
+            subtitle = "Respons sentuhan unbuffered 60/120Hz dengan akselerasi geser halus",
+            currentVal = touchLookSensitivity,
+            minVal = 0.15f,
+            maxVal = 3.00f,
+            accentColor = 0xFFC87D55.toInt(),
+            onStepMinus = { touchLookSensitivity -= 0.12f; postInvalidateOnAnimation() },
+            onStepPlus = { touchLookSensitivity += 0.12f; postInvalidateOnAnimation() },
+            onSlideValue = { newSens -> touchLookSensitivity = newSens; postInvalidateOnAnimation() },
+            clipTop = clipTop,
+            clipBottom = clipBottom
+        )
+
+        // 4. Interactive Draggable Slider: SKALA RESOLUSI RENDER FPS (C++ Hardware Scaler 50% - 100%)
+        val resScale = PerformanceBooster.getResolutionScale(context)
+        val resPct = (resScale * 100f).roundToInt()
+        y = drawSidebarSliderCard(
+            canvas = canvas,
+            left = left,
+            y = y,
+            width = width,
+            title = "SKALA RESOLUSI RENDER FPS (TURBO C++)",
+            valueBadge = "$resPct%",
+            subtitle = "65%-75% mendongkrak FPS Redmi A2 hingga 2x lipat tanpa ubah ukuran UI",
+            currentVal = resScale,
+            minVal = 0.50f,
+            maxVal = 1.00f,
+            accentColor = 0xFFE6B86A.toInt(),
+            onStepMinus = {
+                PerformanceBooster.setResolutionScale(context, resScale - 0.05f)
+                postInvalidateOnAnimation()
+            },
+            onStepPlus = {
+                PerformanceBooster.setResolutionScale(context, resScale + 0.05f)
+                postInvalidateOnAnimation()
+            },
+            onSlideValue = { newScale ->
+                PerformanceBooster.setResolutionScale(context, newScale)
+                postInvalidateOnAnimation()
+            },
+            clipTop = clipTop,
+            clipBottom = clipBottom
+        )
+
+        // Row 5: Edit HUD Position & Studio Pengaturan Lengkap
         y = drawSidebarDualButtons(
             canvas, left, y, halfW,
-            "EDIT POSISI HUD", 0xFFC87D55.toInt(),
+            " PINDAHKAN POSISI TOMBOL", 0xFFC87D55.toInt(),
             { enterVisualEditMode() },
-            "STUDIO KEYBIND", 0xFF5A7D9A.toInt(),
+            "PENGATURAN LENGKAP", 0xFF5A7D9A.toInt(),
             {
                 isSidebarDrawerOpen = false
                 onQuickSettingsRequested?.invoke()
@@ -978,24 +1124,13 @@ class ProHudOverlayView @JvmOverloads constructor(
             clipTop, clipBottom
         )
 
-        // Row 2: Virtual Cursor Toggle & Cursor Visual Style
-        val cursorLbl = if (isVirtualCursorEnabled) "KURSOR: MANUAL ON" else "KURSOR: AUTO MENU"
+        // Row 6: Virtual Cursor Toggle & Clean HUD Toggle
+        val cursorLbl = if (isVirtualCursorEnabled) "KURSOR MOUSE: ON" else "KURSOR MOUSE: AUTO"
+        val cleanLbl = if (isHudCleanModeHidden) "SEMBUNYIKAN HUD: ON" else "SEMBUNYIKAN HUD: OFF"
         y = drawSidebarDualButtons(
             canvas, left, y, halfW,
             cursorLbl, if (isVirtualCursorEnabled) 0xFF4E8C57.toInt() else 0xFF282623.toInt(),
             { toggleVirtualCursor() },
-            "GAYA: ${getCursorStyleName().take(12)}", 0xFF282623.toInt(),
-            { cycleCursorStyle() },
-            clipTop, clipBottom
-        )
-
-        // Row 3: Direct Touch Menu vs Relative Trackpad & Clean HUD Toggle
-        val touchModeLbl = if (directTouchMenuClickEnabled) "MENU: SENTUH LANGSUNG" else "MENU: TRACKPAD RELATIF"
-        val cleanLbl = if (isHudCleanModeHidden) "HUD: DISEMBUNYIKAN" else "HUD: TAMPIL PENUH"
-        y = drawSidebarDualButtons(
-            canvas, left, y, halfW,
-            touchModeLbl, 0xFF282623.toInt(),
-            { directTouchMenuClickEnabled = !directTouchMenuClickEnabled },
             cleanLbl, if (isHudCleanModeHidden) 0xFFC87D55.toInt() else 0xFF282623.toInt(),
             {
                 isHudCleanModeHidden = !isHudCleanModeHidden
@@ -1004,41 +1139,14 @@ class ProHudOverlayView @JvmOverloads constructor(
             clipTop, clipBottom
         )
 
-        // Row 4: Camera Sensitivity (- / +)
-        val sensPct = (touchLookSensitivity * 100f).roundToInt()
-        y = drawSidebarStepperCard(
-            canvas, left, y, width,
-            "Sensitivitas Kamera 3D: $sensPct%",
-            "- 10%", { touchLookSensitivity -= 0.10f; postInvalidateOnAnimation() },
-            "+ 10%", { touchLookSensitivity += 0.10f; postInvalidateOnAnimation() },
-            clipTop, clipBottom
-        )
-
-        // Row 5: Cursor Speed Multiplier (- / +)
-        val curSpdPct = (cursorSpeedMultiplier * 100f).roundToInt()
-        y = drawSidebarStepperCard(
-            canvas, left, y, width,
-            "Kecepatan Kursor Mouse: $curSpdPct%",
-            "- 15%", { cursorSpeedMultiplier -= 0.15f; postInvalidateOnAnimation() },
-            "+ 15%", { cursorSpeedMultiplier += 0.15f; postInvalidateOnAnimation() },
-            clipTop, clipBottom
-        )
-
-        // Row 6: Global Button Size (- / +)
-        y = drawSidebarStepperCard(
-            canvas, left, y, width,
-            "Ukuran Seluruh Tombol HUD",
-            "KECILKAN -", { scaleAllButtons(-2.5f) },
-            "BESARKAN +", { scaleAllButtons(+2.5f) },
-            clipTop, clipBottom
-        )
-
-        // Row 7: Global Button Opacity (- / +)
-        y = drawSidebarStepperCard(
-            canvas, left, y, width,
-            "Transparansi / Opasitas Tombol HUD",
-            "TRANSPARAN -", { adjustAllButtonsOpacity(-0.08f) },
-            "TEGAS +", { adjustAllButtonsOpacity(+0.08f) },
+        // Row 7: Direct Touch Menu vs Relative Trackpad & Cursor Style
+        val touchModeLbl = if (directTouchMenuClickEnabled) "MENU: SENTUH LANGSUNG" else "MENU: TRACKPAD"
+        y = drawSidebarDualButtons(
+            canvas, left, y, halfW,
+            touchModeLbl, 0xFF282623.toInt(),
+            { directTouchMenuClickEnabled = !directTouchMenuClickEnabled },
+            "GAYA: ${getCursorStyleName().take(12)}", 0xFF282623.toInt(),
+            { cycleCursorStyle() },
             clipTop, clipBottom
         )
 
@@ -1462,8 +1570,8 @@ class ProHudOverlayView @JvmOverloads constructor(
         }
         y += dp(42f)
 
-        // 3. Boost Status & Real-Time Telemetry Card
-        val infoCardH = dp(94f)
+        // 3. Boost Status & Real-Time Native C++ Turbo Telemetry Card
+        val infoCardH = dp(104f)
         val cardRect = RectF(left, y, left + width, y + infoCardH)
         bgFillPaint.color = 0xFF22211E.toInt()
         canvas.drawRoundRect(cardRect, dp(8f), dp(8f), bgFillPaint)
@@ -1473,15 +1581,46 @@ class ProHudOverlayView @JvmOverloads constructor(
         leftTextPaint.textSize = dp(9.2f)
         leftTextPaint.color = 0xFF8CD996.toInt()
         val activeBoostProf = PerformanceBooster.getActiveProfile(context)
-        canvas.drawText("PROFIL BOOST AKTIF: ${activeBoostProf.title}", left + dp(10f), y + dp(16f), leftTextPaint)
+        val resScale = PerformanceBooster.getResolutionScale(context)
+        canvas.drawText("PROFIL AKTIF: ${activeBoostProf.title}  |  SKALA C++: ${(resScale * 100f).roundToInt()}%", left + dp(10f), y + dp(16f), leftTextPaint)
 
-        subTextPaint.textSize = dp(8.5f)
-        canvas.drawText("FPS: $currentFps  |  1% Low: $cachedOnePercentLow  |  Frame Time: ${String.format("%.1f", cachedFrameTimeMs)} ms", left + dp(10f), y + dp(33f), subTextPaint)
-        canvas.drawText("JVM Heap: $cachedJvmUsedMb / $cachedJvmMaxMb MB  |  RAM Perangkat: $cachedSysRamPct%", left + dp(10f), y + dp(49f), subTextPaint)
-        canvas.drawText("Renderer: $activeRendererLabel  |  Jarak Pandang: ${PerformanceBooster.getRenderDistanceChunks(context)} Chunk", left + dp(10f), y + dp(65f), subTextPaint)
+        subTextPaint.textSize = dp(8.4f)
+        canvas.drawText("FPS: $currentFps  |  1% Low: $cachedOnePercentLow  |  Frame Time: ${String.format("%.1f", cachedFrameTimeMs)} ms", left + dp(10f), y + dp(32f), subTextPaint)
+        canvas.drawText("JVM Heap: $cachedJvmUsedMb / $cachedJvmMaxMb MB  |  RAM Perangkat: $cachedSysRamPct%", left + dp(10f), y + dp(47f), subTextPaint)
+        canvas.drawText("Mod Aktif: Sodium 0.5.8 + ImmediatelyFast + Lithium + Ferrite + EntityCulling", left + dp(10f), y + dp(62f), subTextPaint)
+        canvas.drawText("Mesin Native: libvelocraft_turbo.so (MultiDraw Fix + GL4ES FastMath + VBO)", left + dp(10f), y + dp(77f), subTextPaint)
         val boostSum = TextUtils.ellipsize(PerformanceBooster.getLastBoostSummary(context), subTextPaint, width - dp(20f), TextUtils.TruncateAt.END).toString()
-        canvas.drawText(boostSum, left + dp(10f), y + dp(82f), subTextPaint)
-        y += infoCardH + dp(10f)
+        canvas.drawText(boostSum, left + dp(10f), y + dp(93f), subTextPaint)
+        y += infoCardH + dp(8f)
+
+        // 3B. Interactive Draggable Slider for C++ Hardware Resolution Scaling (50% - 100%)
+        y = drawSidebarSliderCard(
+            canvas = canvas,
+            left = left,
+            y = y,
+            width = width,
+            title = "SKALA RESOLUSI HARDWARE (C++ ANATIVEWINDOW)",
+            valueBadge = "${(resScale * 100f).roundToInt()}%",
+            subtitle = "Turunkan ke 65% di Redmi A2 untuk naikkan FPS dari 8 FPS ke 25-35+ FPS",
+            currentVal = resScale,
+            minVal = 0.50f,
+            maxVal = 1.00f,
+            accentColor = 0xFFE6B86A.toInt(),
+            onStepMinus = {
+                PerformanceBooster.setResolutionScale(context, resScale - 0.05f)
+                postInvalidateOnAnimation()
+            },
+            onStepPlus = {
+                PerformanceBooster.setResolutionScale(context, resScale + 0.05f)
+                postInvalidateOnAnimation()
+            },
+            onSlideValue = { newScale ->
+                PerformanceBooster.setResolutionScale(context, newScale)
+                postInvalidateOnAnimation()
+            },
+            clipTop = clipTop,
+            clipBottom = clipBottom
+        )
 
         // 4. 4 Performance Boost Profile Presets
         leftTextPaint.textSize = dp(9.2f)
@@ -1611,6 +1750,108 @@ class ProHudOverlayView @JvmOverloads constructor(
         registerSidebarHit(r1, clipTop, clipBottom, action1)
         registerSidebarHit(r2, clipTop, clipBottom, action2)
         return y + h + dp(6f)
+    }
+
+    private fun drawSidebarSliderCard(
+        canvas: Canvas,
+        left: Float,
+        y: Float,
+        width: Float,
+        title: String,
+        valueBadge: String,
+        subtitle: String,
+        currentVal: Float,
+        minVal: Float,
+        maxVal: Float,
+        accentColor: Int,
+        onStepMinus: () -> Unit,
+        onStepPlus: () -> Unit,
+        onSlideValue: (Float) -> Unit,
+        clipTop: Float,
+        clipBottom: Float
+    ): Float {
+        val h = dp(58f)
+        val cardRect = RectF(left, y, left + width, y + h)
+        bgFillPaint.color = 0xFF22211E.toInt()
+        canvas.drawRoundRect(cardRect, dp(8f), dp(8f), bgFillPaint)
+        strokePaint.color = 0xFF3E3B35.toInt()
+        strokePaint.strokeWidth = dp(1.2f)
+        canvas.drawRoundRect(cardRect, dp(8f), dp(8f), strokePaint)
+
+        // Title on top-left
+        leftTextPaint.textSize = dp(9.0f)
+        leftTextPaint.color = 0xFFF4F1EA.toInt()
+        canvas.drawText(title, left + dp(9f), y + dp(15f), leftTextPaint)
+
+        // Value Pill Badge on top-right
+        val badgeW = dp(54f)
+        val badgeRect = RectF(cardRect.right - dp(8f) - badgeW, y + dp(4f), cardRect.right - dp(8f), y + dp(20f))
+        bgFillPaint.color = accentColor
+        canvas.drawRoundRect(badgeRect, dp(5f), dp(5f), bgFillPaint)
+        textPaint.textSize = dp(8.4f)
+        textPaint.color = 0xFFF4F1EA.toInt()
+        canvas.drawText(valueBadge, badgeRect.centerX(), badgeRect.centerY() + dp(2.8f), textPaint)
+
+        // Subtitle helper line
+        subTextPaint.textSize = dp(7.6f)
+        subTextPaint.color = 0xFFB8B2A6.toInt()
+        canvas.drawText(subtitle, left + dp(9f), y + dp(26f), subTextPaint)
+
+        // Bottom row: [-] Button + Draggable Slider Bar + [+] Button
+        val stepBtnW = dp(34f)
+        val rowTop = y + dp(31f)
+        val rowBottom = y + h - dp(5f)
+        val minusRect = RectF(left + dp(8f), rowTop, left + dp(8f) + stepBtnW, rowBottom)
+        val plusRect = RectF(cardRect.right - dp(8f) - stepBtnW, rowTop, cardRect.right - dp(8f), rowBottom)
+
+        bgFillPaint.color = 0xFF2E2C28.toInt()
+        canvas.drawRoundRect(minusRect, dp(5.5f), dp(5.5f), bgFillPaint)
+        strokePaint.color = 0xFF4A4740.toInt()
+        canvas.drawRoundRect(minusRect, dp(5.5f), dp(5.5f), strokePaint)
+
+        bgFillPaint.color = accentColor
+        canvas.drawRoundRect(plusRect, dp(5.5f), dp(5.5f), bgFillPaint)
+
+        textPaint.textSize = dp(10.0f)
+        textPaint.color = 0xFFF4F1EA.toInt()
+        canvas.drawText("-", minusRect.centerX(), minusRect.centerY() + dp(3.4f), textPaint)
+        canvas.drawText("+", plusRect.centerX(), plusRect.centerY() + dp(3.4f), textPaint)
+
+        // Interactive Slider Track in between [-] and [+]
+        val trackLeft = minusRect.right + dp(10f)
+        val trackRight = plusRect.left - dp(10f)
+        val trackCy = (rowTop + rowBottom) * 0.5f
+        val trackH = dp(7f)
+        val trackVisualRect = RectF(trackLeft, trackCy - trackH * 0.5f, trackRight, trackCy + trackH * 0.5f)
+        bgFillPaint.color = 0xFF141311.toInt()
+        canvas.drawRoundRect(trackVisualRect, dp(3.5f), dp(3.5f), bgFillPaint)
+        strokePaint.color = 0xFF3A3732.toInt()
+        canvas.drawRoundRect(trackVisualRect, dp(3.5f), dp(3.5f), strokePaint)
+
+        val ratio = ((currentVal - minVal) / (maxVal - minVal).coerceAtLeast(0.0001f)).coerceIn(0f, 1f)
+        val fillRight = trackLeft + (trackRight - trackLeft) * ratio
+        val fillRect = RectF(trackLeft, trackCy - trackH * 0.5f, fillRight.coerceAtLeast(trackLeft + dp(4f)), trackCy + trackH * 0.5f)
+        bgFillPaint.color = accentColor
+        canvas.drawRoundRect(fillRect, dp(3.5f), dp(3.5f), bgFillPaint)
+
+        // Slider Thumb Knob
+        val thumbR = dp(7.5f)
+        bgFillPaint.color = 0xFFF4F1EA.toInt()
+        canvas.drawCircle(fillRight, trackCy, thumbR, bgFillPaint)
+        strokePaint.color = accentColor
+        strokePaint.strokeWidth = dp(2.0f)
+        canvas.drawCircle(fillRight, trackCy, thumbR, strokePaint)
+        strokePaint.strokeWidth = dp(1.2f)
+
+        // Register touch hits
+        registerSidebarHit(minusRect, clipTop, clipBottom, onStepMinus)
+        registerSidebarHit(plusRect, clipTop, clipBottom, onStepPlus)
+        val touchHitRect = RectF(trackLeft - dp(6f), rowTop - dp(3f), trackRight + dp(6f), rowBottom + dp(3f))
+        if (touchHitRect.bottom >= clipTop && touchHitRect.top <= clipBottom) {
+            sidebarSliderHits.add(SidebarSliderHit(touchHitRect, minVal, maxVal, onSlideValue))
+        }
+
+        return y + h + dp(7f)
     }
 
     private fun drawSidebarStepperCard(
@@ -1787,8 +2028,8 @@ class ProHudOverlayView @JvmOverloads constructor(
     }
 
     private fun drawEditorStudioDock(canvas: Canvas, w: Float, h: Float) {
-        val barW = dp(590f).coerceAtMost(w * 0.95f)
-        val barH = dp(88f)
+        val barW = dp(610f).coerceAtMost(w * 0.96f)
+        val barH = dp(122f)
         val left = (w - barW) * 0.5f
         val top = dp(38f)
         val barRect = RectF(left, top, left + barW, top + barH)
@@ -1804,9 +2045,9 @@ class ProHudOverlayView @JvmOverloads constructor(
             val opPct = (sel.opacity * 100).roundToInt()
             "Terpilih: [${sel.label}]  |  Pos: $pctX%, $pctY%  |  Ukuran: ${sel.radiusDp.toInt()}dp  |  Opasitas: $opPct%  |  Bentuk: ${sel.shape.displayName}"
         } else {
-            "Ketuk tombol mana saja di layar untuk memilih & menggeser posisinya"
+            "Ketuk tombol mana saja di layar untuk memilih, geser posisi, atau atur Opasitas di bawah"
         }
-        textPaint.textSize = dp(9.2f)
+        textPaint.textSize = dp(9.0f)
         textPaint.color = 0xFFD6D2C8.toInt()
         canvas.drawText(infoText, barRect.centerX(), top + dp(14f), textPaint)
         textPaint.color = 0xFFF4F1EA.toInt()
@@ -1814,10 +2055,11 @@ class ProHudOverlayView @JvmOverloads constructor(
         val gap = dp(4.5f)
         val cols = 5
         val itemW = (barW - gap * (cols + 1)) / cols
-        val rowH = dp(28f)
+        val rowH = dp(26f)
 
-        val row1Top = top + dp(21f)
-        val row2Top = row1Top + rowH + dp(5f)
+        val row1Top = top + dp(20f)
+        val row2Top = row1Top + rowH + dp(4.5f)
+        val row3Top = row2Top + rowH + dp(5.5f)
 
         val row1Items = listOf(
             Triple(editAddKeyRect, "+ TAMBAH", 0xFF4E8C57.toInt()),
@@ -1832,8 +2074,8 @@ class ProHudOverlayView @JvmOverloads constructor(
             item.first.set(rLeft, row1Top, rLeft + itemW, row1Top + rowH)
             bgFillPaint.color = item.third
             canvas.drawRoundRect(item.first, dp(6f), dp(6f), bgFillPaint)
-            textPaint.textSize = dp(9.0f)
-            canvas.drawText(item.second, item.first.centerX(), item.first.centerY() + dp(3.2f), textPaint)
+            textPaint.textSize = dp(8.8f)
+            canvas.drawText(item.second, item.first.centerX(), item.first.centerY() + dp(3.1f), textPaint)
         }
 
         val r2Col0Left = left + gap
@@ -1861,9 +2103,73 @@ class ProHudOverlayView @JvmOverloads constructor(
         )) {
             bgFillPaint.color = col
             canvas.drawRoundRect(rect, dp(6f), dp(6f), bgFillPaint)
-            textPaint.textSize = dp(8.8f)
-            canvas.drawText(lbl, rect.centerX(), rect.centerY() + dp(3.2f), textPaint)
+            textPaint.textSize = dp(8.6f)
+            canvas.drawText(lbl, rect.centerX(), rect.centerY() + dp(3.1f), textPaint)
         }
+
+        // Row 3: Interactive Draggable Opacity Slider + Size Slider + [SAMAKAN OPASITAS SEMUA]
+        val sliderW = (barW - gap * 4f) * 0.36f
+        val applyAllW = barW - gap * 4f - sliderW * 2f
+
+        editOpacitySliderRect.set(left + gap, row3Top, left + gap + sliderW, row3Top + rowH + dp(2f))
+        editSizeSliderRect.set(editOpacitySliderRect.right + gap, row3Top, editOpacitySliderRect.right + gap + sliderW, row3Top + rowH + dp(2f))
+        editApplyAllOpacityRect.set(editSizeSliderRect.right + gap, row3Top, editSizeSliderRect.right + gap + applyAllW, row3Top + rowH + dp(2f))
+
+        // Draw Opacity Slider Box
+        val curOp = (sel?.opacity ?: globalHudOpacity).coerceIn(0.08f, 1.0f)
+        val opRatio = ((curOp - 0.08f) / 0.92f).coerceIn(0f, 1f)
+        bgFillPaint.color = 0xFF1F1E1B.toInt()
+        canvas.drawRoundRect(editOpacitySliderRect, dp(6f), dp(6f), bgFillPaint)
+        val opFillRect = RectF(
+            editOpacitySliderRect.left,
+            editOpacitySliderRect.top,
+            editOpacitySliderRect.left + editOpacitySliderRect.width() * opRatio,
+            editOpacitySliderRect.bottom
+        )
+        bgFillPaint.color = 0xAA4E8C57.toInt()
+        canvas.drawRoundRect(opFillRect, dp(6f), dp(6f), bgFillPaint)
+        strokePaint.color = 0xFF8CD996.toInt()
+        canvas.drawRoundRect(editOpacitySliderRect, dp(6f), dp(6f), strokePaint)
+        textPaint.textSize = dp(8.2f)
+        canvas.drawText(
+            "GESER OPASITAS: ${(curOp * 100f).roundToInt()}%",
+            editOpacitySliderRect.centerX(),
+            editOpacitySliderRect.centerY() + dp(3.0f),
+            textPaint
+        )
+
+        // Draw Size Slider Box
+        val curRad = (sel?.radiusDp ?: 24f).coerceIn(14f, 60f)
+        val radRatio = ((curRad - 14f) / 46f).coerceIn(0f, 1f)
+        bgFillPaint.color = 0xFF1F1E1B.toInt()
+        canvas.drawRoundRect(editSizeSliderRect, dp(6f), dp(6f), bgFillPaint)
+        val radFillRect = RectF(
+            editSizeSliderRect.left,
+            editSizeSliderRect.top,
+            editSizeSliderRect.left + editSizeSliderRect.width() * radRatio,
+            editSizeSliderRect.bottom
+        )
+        bgFillPaint.color = 0xAA5A7D9A.toInt()
+        canvas.drawRoundRect(radFillRect, dp(6f), dp(6f), bgFillPaint)
+        strokePaint.color = 0xFF7CA5C7.toInt()
+        canvas.drawRoundRect(editSizeSliderRect, dp(6f), dp(6f), strokePaint)
+        canvas.drawText(
+            "GESER UKURAN: ${curRad.roundToInt()}dp",
+            editSizeSliderRect.centerX(),
+            editSizeSliderRect.centerY() + dp(3.0f),
+            textPaint
+        )
+
+        // Draw [SAMAKAN OPASITAS SEMUA] Button
+        bgFillPaint.color = 0xFFC87D55.toInt()
+        canvas.drawRoundRect(editApplyAllOpacityRect, dp(6f), dp(6f), bgFillPaint)
+        textPaint.textSize = dp(8.0f)
+        canvas.drawText(
+            "TERAPKAN OPASITAS KE SEMUA",
+            editApplyAllOpacityRect.centerX(),
+            editApplyAllOpacityRect.centerY() + dp(3.0f),
+            textPaint
+        )
     }
 
     private fun drawHotbarBar(canvas: Canvas, w: Float, h: Float) {
@@ -1873,8 +2179,10 @@ class ProHudOverlayView @JvmOverloads constructor(
         val top = h - barHeight - dp(8f)
         hotbarRect.set(left, top, left + barWidth, top + barHeight)
 
-        canvas.drawRoundRect(hotbarRect, dp(8f), dp(8f), hudBannerPaint)
-        strokePaint.color = 0x6658544C
+        val hbOpacity = globalHudOpacity.coerceIn(0.12f, 1.0f)
+        bgFillPaint.color = modulateAlpha(0xE6181715.toInt(), hbOpacity)
+        canvas.drawRoundRect(hotbarRect, dp(8f), dp(8f), bgFillPaint)
+        strokePaint.color = modulateAlpha(0x8858544C.toInt(), hbOpacity)
         strokePaint.strokeWidth = dp(1f)
         canvas.drawRoundRect(hotbarRect, dp(8f), dp(8f), strokePaint)
 
@@ -1889,15 +2197,23 @@ class ProHudOverlayView @JvmOverloads constructor(
                 top + barHeight - dp(2.2f)
             )
             if (isSelected) {
-                bgFillPaint.color = 0x384E8C57
+                bgFillPaint.color = modulateAlpha(0x554E8C57, (hbOpacity + 0.15f).coerceAtMost(1.0f))
                 canvas.drawRoundRect(slotRect, dp(5.5f), dp(5.5f), bgFillPaint)
             }
-            strokePaint.color = if (isSelected) 0xFF5FA869.toInt() else 0x4478736A
+            strokePaint.color = if (isSelected) {
+                modulateAlpha(0xFF5FA869.toInt(), (hbOpacity + 0.20f).coerceAtMost(1.0f))
+            } else {
+                modulateAlpha(0x6678736A, hbOpacity)
+            }
             strokePaint.strokeWidth = if (isSelected) dp(1.8f) else dp(1f)
             canvas.drawRoundRect(slotRect, dp(5.5f), dp(5.5f), strokePaint)
 
             textPaint.textSize = if (isSelected) dp(10.5f) else dp(9.5f)
-            textPaint.color = if (isSelected) 0xFFF4F1EA.toInt() else 0xFFB8B2A6.toInt()
+            textPaint.color = if (isSelected) {
+                modulateAlpha(0xFFF4F1EA.toInt(), (hbOpacity + 0.20f).coerceAtMost(1.0f))
+            } else {
+                modulateAlpha(0xFFB8B2A6.toInt(), (hbOpacity + 0.10f).coerceAtMost(1.0f))
+            }
             canvas.drawText("${i + 1}", slotRect.centerX(), slotRect.centerY() + dp(3.6f), textPaint)
         }
         textPaint.color = 0xFFF4F1EA.toInt()
@@ -1906,6 +2222,12 @@ class ProHudOverlayView @JvmOverloads constructor(
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val action = event.actionMasked
+        if (action == MotionEvent.ACTION_DOWN) {
+            try {
+                requestUnbufferedDispatch(event)
+            } catch (_: Throwable) {
+            }
+        }
         val index = event.actionIndex
         val pointerId = event.getPointerId(index)
         val x = event.getX(index)
@@ -1918,6 +2240,8 @@ class ProHudOverlayView @JvmOverloads constructor(
         if (isSidebarDrawerOpen) {
             return handleSidebarDrawerTouch(event, action, x, y)
         }
+
+        var needsUiRedraw = true
 
         when (action) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
@@ -1975,35 +2299,62 @@ class ProHudOverlayView @JvmOverloads constructor(
                     downLookTimestamp = System.currentTimeMillis()
                     if (isCursorEffective && directTouchMenuClickEnabled) {
                         setVirtualCursorPosition(x, y)
+                    } else {
+                        needsUiRedraw = false
                     }
                 }
             }
 
             MotionEvent.ACTION_MOVE -> {
+                needsUiRedraw = false
+                val histSize = event.historySize
                 for (i in 0 until event.pointerCount) {
                     val pid = event.getPointerId(i)
                     if (pid == lookPointerId) {
-                        val curX = event.getX(i)
-                        val curY = event.getY(i)
-                        val rawDx = curX - lastLookX
-                        val rawDy = curY - lastLookY
-                        lastLookX = curX
-                        lastLookY = curY
-
                         if (isCursorEffective) {
+                            val curX = event.getX(i)
+                            val curY = event.getY(i)
+                            val rawDx = curX - lastLookX
+                            val rawDy = curY - lastLookY
+                            lastLookX = curX
+                            lastLookY = curY
                             if (directTouchMenuClickEnabled) {
                                 setVirtualCursorPosition(curX, curY)
                             } else {
                                 moveVirtualCursorByDelta(
-                                    rawDx * touchLookSensitivity * cursorSpeedMultiplier * 1.4f,
-                                    rawDy * touchLookSensitivity * cursorSpeedMultiplier * 1.4f
+                                    rawDx * touchLookSensitivity * cursorSpeedMultiplier * 1.6f,
+                                    rawDy * touchLookSensitivity * cursorSpeedMultiplier * 1.6f
                                 )
                             }
+                            needsUiRedraw = true
                         } else {
-                            NativeEngineBridge.sendMouseDelta(
-                                rawDx * touchLookSensitivity,
-                                rawDy * touchLookSensitivity
-                            )
+                            // High-Refresh 60Hz / 120Hz Unbuffered Camera Swipe Pipeline
+                            var accumDx = 0f
+                            var accumDy = 0f
+                            for (hIdx in 0 until histSize) {
+                                val hx = event.getHistoricalX(i, hIdx)
+                                val hy = event.getHistoricalY(i, hIdx)
+                                accumDx += (hx - lastLookX)
+                                accumDy += (hy - lastLookY)
+                                lastLookX = hx
+                                lastLookY = hy
+                            }
+                            val curX = event.getX(i)
+                            val curY = event.getY(i)
+                            accumDx += (curX - lastLookX)
+                            accumDy += (curY - lastLookY)
+                            lastLookX = curX
+                            lastLookY = curY
+
+                            if (accumDx != 0f || accumDy != 0f) {
+                                val stepMag = hypot(accumDx.toDouble(), accumDy.toDouble()).toFloat()
+                                val velocityBoost = (1.0f + (stepMag / dp(34f)).coerceIn(0f, 0.95f))
+                                val gain = touchLookSensitivity * 2.15f * velocityBoost
+                                NativeEngineBridge.sendMouseDelta(
+                                    accumDx * gain,
+                                    accumDy * gain
+                                )
+                            }
                         }
                     }
                 }
@@ -2034,7 +2385,9 @@ class ProHudOverlayView @JvmOverloads constructor(
             }
         }
 
-        postInvalidateOnAnimation()
+        if (needsUiRedraw) {
+            postInvalidateOnAnimation()
+        }
         return true
     }
 
@@ -2046,13 +2399,34 @@ class ProHudOverlayView @JvmOverloads constructor(
                     postInvalidateOnAnimation()
                     return true
                 }
+                sidebarTouchDownX = x
                 sidebarTouchDownY = y
                 sidebarTouchLastY = y
                 sidebarIsDraggingScroll = false
+                activeDraggingSidebarSlider = null
+
+                for (slider in sidebarSliderHits) {
+                    if (slider.rect.contains(x, y)) {
+                        activeDraggingSidebarSlider = slider
+                        val ratio = ((x - slider.rect.left) / slider.rect.width().coerceAtLeast(1f)).coerceIn(0f, 1f)
+                        slider.onValue.invoke(slider.minVal + ratio * (slider.maxVal - slider.minVal))
+                        performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                        postInvalidateOnAnimation()
+                        return true
+                    }
+                }
             }
             MotionEvent.ACTION_MOVE -> {
+                val activeSlider = activeDraggingSidebarSlider
+                if (activeSlider != null) {
+                    val ratio = ((x - activeSlider.rect.left) / activeSlider.rect.width().coerceAtLeast(1f)).coerceIn(0f, 1f)
+                    activeSlider.onValue.invoke(activeSlider.minVal + ratio * (activeSlider.maxVal - activeSlider.minVal))
+                    postInvalidateOnAnimation()
+                    return true
+                }
+
                 val dy = sidebarTouchLastY - y
-                if (abs(y - sidebarTouchDownY) > dp(8f)) {
+                if (abs(y - sidebarTouchDownY) > dp(8f) && abs(y - sidebarTouchDownY) > abs(x - sidebarTouchDownX)) {
                     sidebarIsDraggingScroll = true
                 }
                 if (sidebarIsDraggingScroll) {
@@ -2062,6 +2436,11 @@ class ProHudOverlayView @JvmOverloads constructor(
                 }
             }
             MotionEvent.ACTION_UP -> {
+                if (activeDraggingSidebarSlider != null) {
+                    activeDraggingSidebarSlider = null
+                    postInvalidateOnAnimation()
+                    return true
+                }
                 if (!sidebarIsDraggingScroll) {
                     if (sidebarCloseRect.contains(x, y)) {
                         isSidebarDrawerOpen = false
@@ -2089,6 +2468,7 @@ class ProHudOverlayView @JvmOverloads constructor(
                 sidebarIsDraggingScroll = false
             }
             MotionEvent.ACTION_CANCEL -> {
+                activeDraggingSidebarSlider = null
                 sidebarIsDraggingScroll = false
             }
         }
@@ -2098,7 +2478,44 @@ class ProHudOverlayView @JvmOverloads constructor(
     private fun handleEditorTouch(event: MotionEvent, action: Int, x: Float, y: Float): Boolean {
         when (action) {
             MotionEvent.ACTION_DOWN -> {
+                editorDraggingOpacitySlider = false
+                editorDraggingSizeSlider = false
                 when {
+                    editOpacitySliderRect.contains(x, y) -> {
+                        editorDraggingOpacitySlider = true
+                        val ratio = ((x - editOpacitySliderRect.left) / editOpacitySliderRect.width().coerceAtLeast(1f)).coerceIn(0f, 1f)
+                        val newOp = (0.08f + ratio * 0.92f).coerceIn(0.08f, 1.0f)
+                        val sel = selectedEditButton
+                        if (sel != null) {
+                            sel.opacity = newOp
+                            ControlProfileManager.saveLayout(context, buttons)
+                        } else {
+                            setAllButtonsOpacity(newOp)
+                        }
+                        postInvalidateOnAnimation()
+                        return true
+                    }
+                    editSizeSliderRect.contains(x, y) -> {
+                        editorDraggingSizeSlider = true
+                        val ratio = ((x - editSizeSliderRect.left) / editSizeSliderRect.width().coerceAtLeast(1f)).coerceIn(0f, 1f)
+                        val newRad = (14f + ratio * 46f).coerceIn(14f, 60f)
+                        val sel = selectedEditButton
+                        if (sel != null) {
+                            sel.radiusDp = newRad
+                            ControlProfileManager.saveLayout(context, buttons)
+                        } else {
+                            setAllButtonsRadiusDp(newRad)
+                        }
+                        postInvalidateOnAnimation()
+                        return true
+                    }
+                    editApplyAllOpacityRect.contains(x, y) -> {
+                        val targetOp = (selectedEditButton?.opacity ?: globalHudOpacity).coerceIn(0.08f, 1.0f)
+                        setAllButtonsOpacity(targetOp)
+                        showHudToast("Opasitas ${(targetOp * 100f).roundToInt()}% diterapkan ke seluruh tombol HUD!")
+                        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                        return true
+                    }
                     editAddKeyRect.contains(x, y) -> {
                         val newBtn = HudButtonConfig(
                             id = "custom_${System.currentTimeMillis()}",
@@ -2106,7 +2523,7 @@ class ProHudOverlayView @JvmOverloads constructor(
                             normX = 0.50f,
                             normY = 0.54f,
                             radiusDp = 24f,
-                            opacity = 0.82f,
+                            opacity = globalHudOpacity,
                             actionType = ActionType.KEY_HOLD,
                             keyCodeOrButton = 71,
                             isToggle = false,
@@ -2168,9 +2585,9 @@ class ProHudOverlayView @JvmOverloads constructor(
                     }
                     editOpacityMinusRect.contains(x, y) -> {
                         selectedEditButton?.let {
-                            it.opacity = (it.opacity - 0.08f).coerceAtLeast(0.20f)
+                            it.opacity = (it.opacity - 0.08f).coerceAtLeast(0.08f)
                             ControlProfileManager.saveLayout(context, buttons)
-                        }
+                        } ?: adjustAllButtonsOpacity(-0.08f)
                         postInvalidateOnAnimation()
                         return true
                     }
@@ -2178,7 +2595,7 @@ class ProHudOverlayView @JvmOverloads constructor(
                         selectedEditButton?.let {
                             it.opacity = (it.opacity + 0.08f).coerceAtMost(1.0f)
                             ControlProfileManager.saveLayout(context, buttons)
-                        }
+                        } ?: adjustAllButtonsOpacity(+0.08f)
                         postInvalidateOnAnimation()
                         return true
                     }
@@ -2215,6 +2632,30 @@ class ProHudOverlayView @JvmOverloads constructor(
                 }
             }
             MotionEvent.ACTION_MOVE -> {
+                if (editorDraggingOpacitySlider) {
+                    val ratio = ((x - editOpacitySliderRect.left) / editOpacitySliderRect.width().coerceAtLeast(1f)).coerceIn(0f, 1f)
+                    val newOp = (0.08f + ratio * 0.92f).coerceIn(0.08f, 1.0f)
+                    val sel = selectedEditButton
+                    if (sel != null) {
+                        sel.opacity = newOp
+                    } else {
+                        setAllButtonsOpacity(newOp)
+                    }
+                    postInvalidateOnAnimation()
+                    return true
+                }
+                if (editorDraggingSizeSlider) {
+                    val ratio = ((x - editSizeSliderRect.left) / editSizeSliderRect.width().coerceAtLeast(1f)).coerceIn(0f, 1f)
+                    val newRad = (14f + ratio * 46f).coerceIn(14f, 60f)
+                    val sel = selectedEditButton
+                    if (sel != null) {
+                        sel.radiusDp = newRad
+                    } else {
+                        setAllButtonsRadiusDp(newRad)
+                    }
+                    postInvalidateOnAnimation()
+                    return true
+                }
                 draggingButton?.let { btn ->
                     var nx = (x / width.coerceAtLeast(1)).coerceIn(0.04f, 0.96f)
                     var ny = (y / height.coerceAtLeast(1)).coerceIn(0.06f, 0.94f)
@@ -2227,6 +2668,8 @@ class ProHudOverlayView @JvmOverloads constructor(
                 }
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                editorDraggingOpacitySlider = false
+                editorDraggingSizeSlider = false
                 draggingButton = null
                 ControlProfileManager.saveLayout(context, buttons)
             }

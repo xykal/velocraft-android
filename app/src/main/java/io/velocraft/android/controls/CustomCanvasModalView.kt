@@ -17,6 +17,7 @@ import io.velocraft.android.auth.PlayerSessionManager
 import io.velocraft.android.bridge.NativeEngineBridge
 import io.velocraft.android.engine.AccountManager
 import io.velocraft.android.engine.JvmOptimizer
+import io.velocraft.android.engine.PerformanceBooster
 import io.velocraft.android.engine.RendererProfileManager
 import io.velocraft.android.util.SystemImeHelper
 import io.velocraft.android.util.VeloLogger
@@ -100,6 +101,8 @@ class CustomCanvasModalView(
     // Tab 2 Hit Rects
     private val touchSensSliderRect = RectF()
     private val gyroSensSliderRect = RectF()
+    private val hudOpacitySliderRect = RectF()
+    private val hudSizeSliderRect = RectF()
     private val cursorStyleBtnRect = RectF()
     private val cursorTouchModeBtnRect = RectF()
     private val cursorToggleRect = RectF()
@@ -461,22 +464,44 @@ class CustomCanvasModalView(
     ) {
         val totalW = right - left
         val halfW = (totalW - dp(12f)) * 0.5f
-        var y = top + dp(10f)
+        var y = top + dp(8f)
 
-        // Row 1: Two Sliders Side-by-Side (Touch Camera Sensitivity & Gyroscope Sensitivity)
+        // Row 1: Two Sliders Side-by-Side (Global HUD Opacity & Global HUD Button Size)
+        val opPct = (hudView.globalHudOpacity * 100f).roundToInt().coerceIn(8, 100)
+        val avgSize = hudView.getAverageButtonRadiusDp().roundToInt()
+        drawEllipsizedText(canvas, "Opasitas / Transparansi Tombol HUD: $opPct%", left, y, halfW, titlePaint)
+        drawEllipsizedText(canvas, "Ukuran Seluruh Tombol HUD: $avgSize dp", left + halfW + dp(12f), y, halfW, titlePaint)
+
+        y += dp(5f)
+        val sliderH = dp(22f)
+        hudOpacitySliderRect.set(left, y, left + halfW, y + sliderH)
+        canvas.drawRoundRect(hudOpacitySliderRect, dp(7f), dp(7f), trackPaint)
+        val opFillW = halfW * ((hudView.globalHudOpacity - 0.08f) / 0.92f).coerceIn(0f, 1f)
+        tmpRect.set(left, y, left + opFillW, y + sliderH)
+        canvas.drawRoundRect(tmpRect, dp(7f), dp(7f), activeGreenPaint)
+        drawCenteredButtonText(canvas, "Geser Opasitas HUD ($opPct%)", hudOpacitySliderRect)
+
+        hudSizeSliderRect.set(left + halfW + dp(12f), y, right, y + sliderH)
+        canvas.drawRoundRect(hudSizeSliderRect, dp(7f), dp(7f), trackPaint)
+        val sizeFillW = halfW * ((avgSize - 14f) / 42f).coerceIn(0f, 1f)
+        tmpRect.set(hudSizeSliderRect.left, y, hudSizeSliderRect.left + sizeFillW, y + sliderH)
+        canvas.drawRoundRect(tmpRect, dp(7f), dp(7f), slateBluePaint)
+        drawCenteredButtonText(canvas, "Geser Ukuran Tombol ($avgSize dp)", hudSizeSliderRect)
+
+        // Row 2: Two Sliders Side-by-Side (Touch Camera Sensitivity 60/120Hz & Gyroscope Sensitivity)
+        y += sliderH + dp(10f)
         val touchPct = (hudView.touchLookSensitivity * 100).toInt()
-        drawEllipsizedText(canvas, "Sensitivitas Kamera Sentuh: $touchPct%", left, y, halfW, titlePaint)
+        drawEllipsizedText(canvas, "Sensitivitas Geser Kamera (60/120Hz): $touchPct%", left, y, halfW, titlePaint)
         val gyroVal = gyroController.sensitivityX.toInt()
         drawEllipsizedText(canvas, "Sensitivitas Gyroscope (200Hz): ${gyroVal}x", left + halfW + dp(12f), y, halfW, titlePaint)
 
-        y += dp(6f)
-        val sliderH = dp(22f)
+        y += dp(5f)
         touchSensSliderRect.set(left, y, left + halfW, y + sliderH)
         canvas.drawRoundRect(touchSensSliderRect, dp(7f), dp(7f), trackPaint)
-        val touchFillW = halfW * ((touchPct - 15f) / 185f).coerceIn(0f, 1f)
+        val touchFillW = halfW * ((touchPct - 15f) / 285f).coerceIn(0f, 1f)
         tmpRect.set(left, y, left + touchFillW, y + sliderH)
-        canvas.drawRoundRect(tmpRect, dp(7f), dp(7f), activeGreenPaint)
-        drawCenteredButtonText(canvas, "Geser Sensitivitas Sentuh ($touchPct%)", touchSensSliderRect)
+        canvas.drawRoundRect(tmpRect, dp(7f), dp(7f), terraPaint)
+        drawCenteredButtonText(canvas, "Geser Sensitivitas Kamera ($touchPct%)", touchSensSliderRect)
 
         gyroSensSliderRect.set(left + halfW + dp(12f), y, right, y + sliderH)
         canvas.drawRoundRect(gyroSensSliderRect, dp(7f), dp(7f), trackPaint)
@@ -485,9 +510,9 @@ class CustomCanvasModalView(
         canvas.drawRoundRect(tmpRect, dp(7f), dp(7f), activeGreenPaint)
         drawCenteredButtonText(canvas, "Geser Sensitivitas Gyro (${gyroVal}x)", gyroSensSliderRect)
 
-        // Row 2: Cursor Style Picker + Menu Touch Mode Picker
-        y += sliderH + dp(12f)
-        val btnH = dp(32f)
+        // Row 3: Cursor Style Picker + Menu Touch Mode Picker
+        y += sliderH + dp(9f)
+        val btnH = dp(29f)
         cursorStyleBtnRect.set(left, y, left + halfW, y + btnH)
         cursorTouchModeBtnRect.set(left + halfW + dp(12f), y, right, y + btnH)
 
@@ -504,12 +529,12 @@ class CustomCanvasModalView(
         canvas.drawRoundRect(cursorTouchModeBtnRect, dp(7f), dp(7f), borderPaint)
         drawCenteredButtonText(canvas, touchModeName, cursorTouchModeBtnRect)
 
-        // Row 3 & Row 4: 2x2 Feature Toggles + Visual HUD Editor Launcher
-        y += btnH + dp(8f)
+        // Row 4 & Row 5: 2x2 Feature Toggles + Visual HUD Editor Launcher
+        y += btnH + dp(6f)
         cursorToggleRect.set(left, y, left + halfW, y + btnH)
         autoClickToggleRect.set(left + halfW + dp(12f), y, right, y + btnH)
 
-        y += btnH + dp(8f)
+        y += btnH + dp(6f)
         fastPlaceToggleRect.set(left, y, left + halfW, y + btnH)
         openVisualEditorRect.set(left + halfW + dp(12f), y, right, y + btnH)
 
@@ -521,12 +546,12 @@ class CustomCanvasModalView(
         canvas.drawRoundRect(openVisualEditorRect, dp(7f), dp(7f), borderPaint)
         drawCenteredButtonText(canvas, "BUKA VISUAL DRAG & DROP HUD EDITOR", openVisualEditorRect)
 
-        // Row 5: 3 HUD Layout Presets (Standar Studio / PvP Kompetitif / Builder Minimalis)
-        y += btnH + dp(14f)
+        // Row 6: 3 HUD Layout Presets (Standar Studio / PvP Kompetitif / Builder Minimalis)
+        y += btnH + dp(10f)
         drawEllipsizedText(canvas, "Preset Tata Letak HUD Cepat (Ketuk untuk menerapkan):", left, y, totalW, mutedPaint)
-        y += dp(6f)
+        y += dp(5f)
         val presetW = (totalW - dp(16f)) / 3f
-        val presetH = dp(31f)
+        val presetH = dp(28f)
         presetStandardRect.set(left, y, left + presetW, y + presetH)
         presetPvpRect.set(presetStandardRect.right + dp(8f), y, presetStandardRect.right + dp(8f) + presetW, y + presetH)
         presetMinimalRect.set(presetPvpRect.right + dp(8f), y, right, y + presetH)
@@ -881,9 +906,22 @@ class CustomCanvasModalView(
     }
 
     private fun handleControlsSliderDrag(x: Float, y: Float) {
-        if (touchSensSliderRect.contains(x, y)) {
-            val ratio = ((x - touchSensSliderRect.left) / touchSensSliderRect.width()).coerceIn(0.08f, 1f)
-            hudView.touchLookSensitivity = 0.15f + ratio * 1.85f
+        if (hudOpacitySliderRect.contains(x, y)) {
+            val ratio = ((x - hudOpacitySliderRect.left) / hudOpacitySliderRect.width()).coerceIn(0f, 1f)
+            val newOp = (0.08f + ratio * 0.92f).coerceIn(0.08f, 1.0f)
+            hudView.setAllButtonsOpacity(newOp)
+            bannerStatusText = "Opasitas seluruh tombol HUD diatur ke ${(newOp * 100f).roundToInt()}%"
+            postInvalidateOnAnimation()
+        } else if (hudSizeSliderRect.contains(x, y)) {
+            val ratio = ((x - hudSizeSliderRect.left) / hudSizeSliderRect.width()).coerceIn(0f, 1f)
+            val newRad = (14f + ratio * 42f).coerceIn(14f, 56f)
+            hudView.setAllButtonsRadiusDp(newRad)
+            bannerStatusText = "Ukuran seluruh tombol HUD diatur ke ${newRad.roundToInt()} dp"
+            postInvalidateOnAnimation()
+        } else if (touchSensSliderRect.contains(x, y)) {
+            val ratio = ((x - touchSensSliderRect.left) / touchSensSliderRect.width()).coerceIn(0f, 1f)
+            hudView.touchLookSensitivity = 0.15f + ratio * 2.85f
+            bannerStatusText = "Sensitivitas geser kamera 60/120Hz diatur ke ${(hudView.touchLookSensitivity * 100f).roundToInt()}%"
             postInvalidateOnAnimation()
         } else if (gyroSensSliderRect.contains(x, y)) {
             val ratio = ((x - gyroSensSliderRect.left) / gyroSensSliderRect.width()).coerceIn(0.04f, 1f)
@@ -917,17 +955,20 @@ class CustomCanvasModalView(
         }
         if (resScale50Rect.contains(x, y)) {
             JvmOptimizer.setResolutionScalePct(context, 50)
-            bannerStatusText = "Resolusi Render diatur ke 50% (Ultra High FPS)."
+            PerformanceBooster.setResolutionScale(context, 0.50f)
+            bannerStatusText = "Resolusi Render Hardware C++ diatur ke 50% (Ultra High FPS Redmi A2)."
             return
         }
         if (resScale75Rect.contains(x, y)) {
             JvmOptimizer.setResolutionScalePct(context, 75)
-            bannerStatusText = "Resolusi Render diatur ke 75% (Balanced)."
+            PerformanceBooster.setResolutionScale(context, 0.75f)
+            bannerStatusText = "Resolusi Render Hardware C++ diatur ke 75% (Balanced)."
             return
         }
         if (resScale100Rect.contains(x, y)) {
             JvmOptimizer.setResolutionScalePct(context, 100)
-            bannerStatusText = "Resolusi Render diatur ke 100% (Native Tajam)."
+            PerformanceBooster.setResolutionScale(context, 1.00f)
+            bannerStatusText = "Resolusi Render Hardware C++ diatur ke 100% (Native Tajam)."
             return
         }
         if (gcModeToggleRect.contains(x, y)) {
@@ -1108,7 +1149,7 @@ class CustomCanvasModalView(
                 hudView.saveCurrentLayout()
             }
             opacityMinusRect.contains(x, y) -> {
-                currentBtn.opacity = (currentBtn.opacity - 0.08f).coerceAtLeast(0.20f)
+                currentBtn.opacity = (currentBtn.opacity - 0.08f).coerceAtLeast(0.08f)
                 hudView.saveCurrentLayout()
             }
             opacityPlusRect.contains(x, y) -> {

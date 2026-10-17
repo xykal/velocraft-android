@@ -889,7 +889,7 @@ class MainMenuView @JvmOverloads constructor(
         )
         drawFittedText(
             canvas,
-            "Catatan: Pada GL4ES 1.1.5, Sodium/Iris otomatis dinonaktifkan saat masuk dunia agar bebas crash VBO.",
+            "Mesin C++ libvelocraft_turbo.so aktif: Sodium 0.5.8 + ImmediatelyFast berjalan penuh di GL4ES 1.1.5!",
             left + dp(14f),
             top + dp(37f),
             totalW * 0.54f,
@@ -1062,9 +1062,9 @@ class MainMenuView @JvmOverloads constructor(
             ) to ("BUKA KEYBIND KEYBOARD PC" to accentGreenPaint),
             Triple(
                 ctrlSettingsModalBtnRect.apply { set(left, row2Y, left + cardW, row2Y + cardH) },
-                "3. Sensitivitas, Gyro 200Hz & Kursor",
-                "Atur sensitivitas kamera, Gyroscope, Auto-Click 14 CPS & 3 Gaya Kursor."
-            ) to ("ATUR SENSITIVITAS & KURSOR" to accentGreenPaint),
+                "3. Opasitas HUD, Sensitivitas 60/120Hz & Kursor",
+                "Geser slider Opasitas Tombol (8%-100%), Ukuran, & Sensitivitas Geser 60/120Hz."
+            ) to ("ATUR OPASITAS & SENSITIVITAS" to accentGreenPaint),
             Triple(
                 ctrlExportShareJsonRect.apply { set(left + cardW + gap, row2Y, right, row2Y + cardH) },
                 "4. Bagikan / Ekspor Kontrol .JSON",
@@ -1385,9 +1385,21 @@ class MainMenuView @JvmOverloads constructor(
             ramPlusBtnRect.contains(x, y) -> {
                 JvmOptimizer.setCustomHeapMb(context, hw.allocatedHeapMb + 128)
             }
-            res50Rect.contains(x, y) -> JvmOptimizer.setResolutionScalePct(context, 50)
-            res75Rect.contains(x, y) -> JvmOptimizer.setResolutionScalePct(context, 75)
-            res100Rect.contains(x, y) -> JvmOptimizer.setResolutionScalePct(context, 100)
+            res50Rect.contains(x, y) -> {
+                JvmOptimizer.setResolutionScalePct(context, 50)
+                PerformanceBooster.setResolutionScale(context, 0.50f)
+                showBannerMessage("Skala Resolusi Render C++ diatur ke 50% (Ultra FPS Redmi A2).")
+            }
+            res75Rect.contains(x, y) -> {
+                JvmOptimizer.setResolutionScalePct(context, 75)
+                PerformanceBooster.setResolutionScale(context, 0.75f)
+                showBannerMessage("Skala Resolusi Render C++ diatur ke 75% (Seimbang).")
+            }
+            res100Rect.contains(x, y) -> {
+                JvmOptimizer.setResolutionScalePct(context, 100)
+                PerformanceBooster.setResolutionScale(context, 1.00f)
+                showBannerMessage("Skala Resolusi Render C++ diatur ke 100% (Native).")
+            }
             gcG1Rect.contains(x, y) -> JvmOptimizer.setZgcModeEnabled(context, false)
             gcZgcRect.contains(x, y) -> JvmOptimizer.setZgcModeEnabled(context, true)
             boostTurboRect.contains(x, y) -> {

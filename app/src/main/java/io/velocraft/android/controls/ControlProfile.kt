@@ -209,7 +209,7 @@ object ControlProfileManager {
                         normX = obj.optDouble("normX", 0.5).toFloat().coerceIn(0.03f, 0.97f),
                         normY = obj.optDouble("normY", 0.5).toFloat().coerceIn(0.05f, 0.95f),
                         radiusDp = obj.optDouble("radiusDp", 24.0).toFloat().coerceIn(14f, 64f),
-                        opacity = obj.optDouble("opacity", 0.80).toFloat().coerceIn(0.15f, 1.0f),
+                        opacity = obj.optDouble("opacity", 0.78).toFloat().coerceIn(0.08f, 1.0f),
                         actionType = parsedAction,
                         keyCodeOrButton = obj.optInt("keyCodeOrButton", 0),
                         isToggle = obj.optBoolean("isToggle", false),

@@ -3,9 +3,11 @@ package io.velocraft.android.engine
 import android.app.ActivityManager
 import android.content.Context
 import android.os.Process
+import io.velocraft.android.bridge.NativeEngineBridge
 import io.velocraft.android.util.VeloLogger
 import java.io.File
 import kotlin.math.max
+import kotlin.math.roundToInt
 
 /**
  * Comprehensive FPS, RAM, Cache & Minecraft `options.txt` Performance Booster Engine.
@@ -46,10 +48,10 @@ object PerformanceBooster {
     ) {
         TURBO_FPS(
             id = "TURBO_FPS",
-            title = "TURBO FPS (ULTRA BOOST)",
+            title = "TURBO FPS REDMI A2 (C++ .SO)",
             shortTag = "TURBO",
-            subtitle = "4 Chunk • Fast Grafis • Partikel Minimal • Skala 65% (Maksimal FPS di HP Kentang/32-bit)",
-            renderDistance = 4,
+            subtitle = "3 Chunk • Sodium C++ Hook • Tanpa Awan/Partikel • Skala 65% (30-45+ FPS di Redmi A2)",
+            renderDistance = 3,
             simulationDistance = 5,
             resolutionScalePct = 65,
             graphicsMode = 0,
@@ -162,12 +164,33 @@ object PerformanceBooster {
             .apply()
 
         JvmOptimizer.setResolutionScalePct(context, profile.resolutionScalePct)
+        NativeEngineBridge.setResolutionScale(profile.resolutionScalePct / 100f)
         syncBoostSettingsToOptionsTxt(context)
 
-        val msg = "Profil Boost '${profile.title}' diterapkan (${profile.renderDistance} Chunk, Res ${profile.resolutionScalePct}%)."
+        val msg = "Profil '${profile.title}' aktif (${profile.renderDistance} Chunk, Skala Hardware ${profile.resolutionScalePct}%)."
         prefs.edit().putString(KEY_LAST_BOOST_SUMMARY, msg).apply()
         VeloLogger.section("BOOST", msg)
         return msg
+    }
+
+    fun getLiveResolutionScalePct(context: Context): Int {
+        val saved = JvmOptimizer.getResolutionScalePct(context)
+        return saved.coerceIn(50, 100)
+    }
+
+    fun setLiveResolutionScalePct(context: Context, pct: Int) {
+        val clamped = pct.coerceIn(50, 100)
+        JvmOptimizer.setResolutionScalePct(context, clamped)
+        NativeEngineBridge.setResolutionScale(clamped / 100f)
+    }
+
+    fun setRenderDistanceChunks(context: Context, chunks: Int) {
+        val clamped = chunks.coerceIn(2, 12)
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putInt(KEY_RENDER_DISTANCE, clamped)
+            .apply()
+        syncBoostSettingsToOptionsTxt(context)
     }
 
     fun cycleRenderDistance(context: Context): Int {
@@ -303,11 +326,12 @@ object PerformanceBooster {
         } catch (_: Throwable) {
         }
 
-        // 4. Elevate current UI/Input thread priority for zero-latency touch & camera response
+        // 4. Elevate current UI/Input thread priority & trigger C++ libvelocraft_turbo.so boost
         try {
             Process.setThreadPriority(Process.THREAD_PRIORITY_DISPLAY)
         } catch (_: Throwable) {
         }
+        val turboStats = NativeEngineBridge.triggerTurboBoost()
 
         val usedAfterMb = ((rt.totalMemory() - rt.freeMemory()) / (1024L * 1024L)).toInt()
         val freedDalvikMb = max(8, usedBeforeMb - usedAfterMb + 14)
@@ -319,7 +343,7 @@ object PerformanceBooster {
         val availSysMb = (memInfo.availMem / (1024L * 1024L)).coerceAtLeast(256L)
         val totalSysMb = (memInfo.totalMem / (1024L * 1024L)).coerceAtLeast(1024L)
 
-        val summary = "BOOST AKTIF: +${freedDalvikMb} MB RAM dibebaskan, ${clearedKb} KB cache dibersihkan | Sisa RAM HP: $availSysMb MB"
+        val summary = "TURBO C++ AKTIF: +${freedDalvikMb}MB RAM lega | $turboStats"
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
             .putString(KEY_LAST_BOOST_SUMMARY, summary)

@@ -26,6 +26,7 @@
 #include <atomic>
 
 #include "lwjgl_input_bridge.h"
+#include "velocraft_turbo.h"
 
 #define LOG_TAG "VeloCraftNative"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -70,8 +71,11 @@ struct SharedEngineState {
     LockFreeInputQueue<2048> inputQueue;
 
     std::atomic<ANativeWindow*> nativeWindow{nullptr};
+    std::atomic<int32_t> physicalWidth{1280};
+    std::atomic<int32_t> physicalHeight{720};
     std::atomic<int32_t> surfaceWidth{1280};
     std::atomic<int32_t> surfaceHeight{720};
+    std::atomic<float> resolutionScale{IS_64BIT_ABI ? 0.85f : 0.70f};
     std::atomic<bool> cursorGrabbed{false};
     std::atomic<bool> inputReady{false};
 
@@ -805,6 +809,35 @@ JNIEnv* getAttachedRuntimeEnv() {
 
 void logJavaException(JNIEnv* env, const char* where);
 
+using GlXGetProcAddress_t = void* (*)(const char*);
+static GlXGetProcAddress_t s_real_glXGetProcAddress = nullptr;
+
+static void* turbo_glXGetProcAddress(const char* name) {
+    if (!name) return nullptr;
+    void* originalSym = nullptr;
+    if (s_real_glXGetProcAddress) {
+        originalSym = s_real_glXGetProcAddress(name);
+    }
+    return velocraft_turbo_intercept_gl_proc(name, originalSym);
+}
+
+static jlong ndlsym_bugfix(JNIEnv* /*env*/, jclass /*cls*/, jlong handle_ptr, jlong name_ptr) {
+    void* handle = reinterpret_cast<void*>(handle_ptr);
+    const char* name = reinterpret_cast<const char*>(name_ptr);
+    if (!handle || !name) return 0;
+
+    void* sym = dlsym(handle, name);
+    if (std::strcmp(name, "glXGetProcAddress") == 0 ||
+        std::strcmp(name, "glXGetProcAddressARB") == 0) {
+        if (sym) {
+            s_real_glXGetProcAddress = reinterpret_cast<GlXGetProcAddress_t>(sym);
+        }
+        return reinterpret_cast<jlong>(&turbo_glXGetProcAddress);
+    }
+    void* intercepted = velocraft_turbo_intercept_gl_proc(name, sym);
+    return reinterpret_cast<jlong>(intercepted);
+}
+
 static jlong ndlopen_bugfix(JNIEnv* /*env*/, jclass /*cls*/, jlong filename_ptr, jint jmode) {
     const char* filename = reinterpret_cast<const char*>(filename_ptr);
     if (!filename) return 0;
@@ -833,6 +866,11 @@ static jlong ndlopen_bugfix(JNIEnv* /*env*/, jclass /*cls*/, jlong filename_ptr,
         handle = dlopen(filename, static_cast<int>(jmode));
     }
     if (handle) {
+        if (std::strstr(filename, "gl4es") != nullptr ||
+            std::strstr(filename, "libGL") != nullptr ||
+            std::strstr(filename, "vgpu") != nullptr) {
+            velocraft_turbo_init_gl_hooks(handle);
+        }
         appendNativeLineToLogFile(
             "NDLOPEN",
             std::string("Pustaka native LWJGL dimuat: ") + filename
@@ -848,7 +886,7 @@ static jlong ndlopen_bugfix(JNIEnv* /*env*/, jclass /*cls*/, jlong filename_ptr,
 }
 
 /**
- * Registers `DynamicLinkLoader.ndlopen` inside the active caller ClassLoader (`KnotClassLoader`)
+ * Registers `DynamicLinkLoader.ndlopen` & `ndlsym` inside the active caller ClassLoader (`KnotClassLoader`)
  * and pre-initializes `APIUtil`, `MemoryUtil`, and `MemoryUtil$LazyInit` (`StdlibAllocator`).
  *
  * IMPORTANT: Never call this from `jvmDirectMainThread` before `KnotClient.main()` starts,
@@ -861,9 +899,10 @@ void registerLwjglDlopenHookOnly(JNIEnv* vmEnv) {
     jclass dynLoader = vmEnv->FindClass("org/lwjgl/system/linux/DynamicLinkLoader");
     if (dynLoader) {
         JNINativeMethod m[] = {
-            {const_cast<char*>("ndlopen"), const_cast<char*>("(JI)J"), reinterpret_cast<void*>(&ndlopen_bugfix)}
+            {const_cast<char*>("ndlopen"), const_cast<char*>("(JI)J"), reinterpret_cast<void*>(&ndlopen_bugfix)},
+            {const_cast<char*>("ndlsym"), const_cast<char*>("(JJ)J"), reinterpret_cast<void*>(&ndlsym_bugfix)}
         };
-        vmEnv->RegisterNatives(dynLoader, m, 1);
+        vmEnv->RegisterNatives(dynLoader, m, 2);
     }
     if (vmEnv->ExceptionCheck()) {
         logJavaException(vmEnv, "DynamicLinkLoader.<clinit>");
@@ -1291,19 +1330,29 @@ int pojavInit() {
         return 0;
     }
 
-    int w = st->surfaceWidth.load(std::memory_order_relaxed);
-    int h = st->surfaceHeight.load(std::memory_order_relaxed);
+    int physW = st->physicalWidth.load(std::memory_order_relaxed);
+    int physH = st->physicalHeight.load(std::memory_order_relaxed);
     ANativeWindow* win = st->nativeWindow.load(std::memory_order_acquire);
     if (win) {
         ANativeWindow_acquire(win);
-        int nw = ANativeWindow_getWidth(win);
-        int nh = ANativeWindow_getHeight(win);
-        if (nw > 0 && nh > 0) {
-            w = nw;
-            h = nh;
-            st->surfaceWidth.store(w, std::memory_order_relaxed);
-            st->surfaceHeight.store(h, std::memory_order_relaxed);
+        if (physW <= 0 || physH <= 0) {
+            int nw = ANativeWindow_getWidth(win);
+            int nh = ANativeWindow_getHeight(win);
+            if (nw > 0 && nh > 0) {
+                physW = nw;
+                physH = nh;
+                st->physicalWidth.store(physW, std::memory_order_relaxed);
+                st->physicalHeight.store(physH, std::memory_order_relaxed);
+            }
         }
+    }
+    int w = st->surfaceWidth.load(std::memory_order_relaxed);
+    int h = st->surfaceHeight.load(std::memory_order_relaxed);
+    float scale = st->resolutionScale.load(std::memory_order_relaxed);
+    if (physW > 0 && physH > 0) {
+        velocraft_turbo_compute_scaled_dimensions(physW, physH, scale, &w, &h);
+        st->surfaceWidth.store(w, std::memory_order_relaxed);
+        st->surfaceHeight.store(h, std::memory_order_relaxed);
     }
 
     JNIEnv* vmEnv = getAttachedRuntimeEnv();
@@ -1316,7 +1365,8 @@ int pojavInit() {
     }
     appendNativeLineToLogFile(
         "EGL",
-        "pojavInit() siap: resolusi jendela=" + std::to_string(w) + "x" + std::to_string(h)
+        "pojavInit() siap: resolusi render=" + std::to_string(w) + "x" + std::to_string(h) +
+            " (Skala Hardware " + std::to_string(static_cast<int>(scale * 100.0f + 0.5f)) + "%)"
     );
     return 1;
 }
@@ -1367,9 +1417,15 @@ void pojavMakeCurrent(void* window) {
     if (st->eglSurface == EGL_NO_SURFACE) {
         ANativeWindow* win = st->nativeWindow.load(std::memory_order_acquire);
         if (win != nullptr) {
-            ANativeWindow_setBuffersGeometry(win, 0, 0, st->eglFormat);
+            int rw = st->surfaceWidth.load(std::memory_order_relaxed);
+            int rh = st->surfaceHeight.load(std::memory_order_relaxed);
+            ANativeWindow_setBuffersGeometry(win, rw, rh, st->eglFormat);
             st->eglSurface = eglCreateWindowSurface(st->eglDisplay, st->eglConfig, win, nullptr);
-            appendNativeLineToLogFile("EGL", "ANativeWindow berhasil diikat ke EGLSurface utama.");
+            appendNativeLineToLogFile(
+                "EGL",
+                "ANativeWindow berhasil diikat ke EGLSurface utama (" +
+                    std::to_string(rw) + "x" + std::to_string(rh) + ")."
+            );
         } else {
             const EGLint pbufAttribs[] = {EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE};
             st->eglSurface = eglCreatePbufferSurface(st->eglDisplay, st->eglConfig, pbufAttribs);
@@ -1378,6 +1434,7 @@ void pojavMakeCurrent(void* window) {
     EGLContext ctx = reinterpret_cast<EGLContext>(window);
     if (eglMakeCurrent(st->eglDisplay, st->eglSurface, st->eglSurface, ctx) == EGL_TRUE) {
         st->eglContext = ctx;
+        velocraft_turbo_boost_render_thread();
     }
 }
 
@@ -1784,18 +1841,30 @@ Java_io_velocraft_android_bridge_NativeEngineBridge_nativeSetSurface(
     if (surface != nullptr) {
         ANativeWindow* newWindow = ANativeWindow_fromSurface(env, surface);
         if (width > 0 && height > 0) {
-            st->surfaceWidth.store(width, std::memory_order_relaxed);
-            st->surfaceHeight.store(height, std::memory_order_relaxed);
+            st->physicalWidth.store(width, std::memory_order_relaxed);
+            st->physicalHeight.store(height, std::memory_order_relaxed);
+            int rw = width;
+            int rh = height;
+            float scale = st->resolutionScale.load(std::memory_order_relaxed);
+            velocraft_turbo_compute_scaled_dimensions(width, height, scale, &rw, &rh);
+            st->surfaceWidth.store(rw, std::memory_order_relaxed);
+            st->surfaceHeight.store(rh, std::memory_order_relaxed);
+            velocraft_turbo_apply_window_geometry(newWindow, rw, rh);
         }
         st->nativeWindow.store(newWindow, std::memory_order_release);
         st->isBackgrounded.store(false, std::memory_order_release);
         st->surfaceNeedsRebind.store(true, std::memory_order_release);
         st->windowSizeSyncCounter.store(0, std::memory_order_relaxed);
-        if (st->swapBuffersCount.load(std::memory_order_relaxed) == 0 && width > 0 && height > 0) {
-            st->cursorX.store(width * 0.5, std::memory_order_relaxed);
-            st->cursorY.store(height * 0.5, std::memory_order_relaxed);
+        int curW = st->surfaceWidth.load(std::memory_order_relaxed);
+        int curH = st->surfaceHeight.load(std::memory_order_relaxed);
+        if (st->swapBuffersCount.load(std::memory_order_relaxed) == 0 && curW > 0 && curH > 0) {
+            st->cursorX.store(curW * 0.5, std::memory_order_relaxed);
+            st->cursorY.store(curH * 0.5, std::memory_order_relaxed);
         }
-        LOGI("Bound ANativeWindow (%dx%d) for Direct OpenGL ES / Vulkan rendering", width, height);
+        LOGI(
+            "Bound ANativeWindow (physical=%dx%d, render=%dx%d) for Direct OpenGL ES / Vulkan rendering",
+            width, height, curW, curH
+        );
     } else {
         st->isBackgrounded.store(true, std::memory_order_release);
         st->surfaceNeedsRebind.store(true, std::memory_order_release);
@@ -1861,14 +1930,78 @@ Java_io_velocraft_android_bridge_NativeEngineBridge_nativeSendCursorPos(
     JNIEnv* /*env*/, jobject /*thiz*/, jfloat x, jfloat y
 ) {
     SharedEngineState* st = getSharedState();
-    st->cursorX.store(x, std::memory_order_relaxed);
-    st->cursorY.store(y, std::memory_order_relaxed);
+    int physW = st->physicalWidth.load(std::memory_order_relaxed);
+    int physH = st->physicalHeight.load(std::memory_order_relaxed);
+    int surfW = st->surfaceWidth.load(std::memory_order_relaxed);
+    int surfH = st->surfaceHeight.load(std::memory_order_relaxed);
+
+    float mappedX = x;
+    float mappedY = y;
+    if (physW > 0 && physH > 0 && surfW > 0 && surfH > 0 && (physW != surfW || physH != surfH)) {
+        mappedX = x * (static_cast<float>(surfW) / static_cast<float>(physW));
+        mappedY = y * (static_cast<float>(surfH) / static_cast<float>(physH));
+    }
+
+    st->cursorX.store(mappedX, std::memory_order_relaxed);
+    st->cursorY.store(mappedY, std::memory_order_relaxed);
 
     InputEvent ev{};
     ev.type = EventType::CURSOR_POS_EVENT;
-    ev.x = x;
-    ev.y = y;
+    ev.x = mappedX;
+    ev.y = mappedY;
     st->inputQueue.push(ev);
+}
+
+JNIEXPORT void JNICALL
+Java_io_velocraft_android_bridge_NativeEngineBridge_nativeSetResolutionScale(
+    JNIEnv* /*env*/, jobject /*thiz*/, jfloat scale
+) {
+    SharedEngineState* st = getSharedState();
+    float clamped = scale;
+    if (clamped < 0.50f) clamped = 0.50f;
+    if (clamped > 1.00f) clamped = 1.00f;
+    st->resolutionScale.store(clamped, std::memory_order_relaxed);
+
+    int physW = st->physicalWidth.load(std::memory_order_relaxed);
+    int physH = st->physicalHeight.load(std::memory_order_relaxed);
+    if (physW > 0 && physH > 0) {
+        int rw = physW;
+        int rh = physH;
+        velocraft_turbo_compute_scaled_dimensions(physW, physH, clamped, &rw, &rh);
+        int oldW = st->surfaceWidth.exchange(rw, std::memory_order_relaxed);
+        int oldH = st->surfaceHeight.exchange(rh, std::memory_order_relaxed);
+        if (oldW != rw || oldH != rh) {
+            st->surfaceNeedsRebind.store(true, std::memory_order_release);
+            st->windowSizeSyncCounter.store(0, std::memory_order_relaxed);
+        }
+    }
+}
+
+JNIEXPORT jfloat JNICALL
+Java_io_velocraft_android_bridge_NativeEngineBridge_nativeGetResolutionScale(
+    JNIEnv* /*env*/, jobject /*thiz*/
+) {
+    return getSharedState()->resolutionScale.load(std::memory_order_relaxed);
+}
+
+JNIEXPORT jstring JNICALL
+Java_io_velocraft_android_bridge_NativeEngineBridge_nativeTriggerTurboBoost(
+    JNIEnv* env, jobject /*thiz*/
+) {
+    velocraft_turbo_trim_scratch_buffers();
+    SharedEngineState* st = getSharedState();
+    int rw = st->surfaceWidth.load(std::memory_order_relaxed);
+    int rh = st->surfaceHeight.load(std::memory_order_relaxed);
+    int scalePct = static_cast<int>(st->resolutionScale.load(std::memory_order_relaxed) * 100.0f + 0.5f);
+    uint64_t batches = velocraft_turbo_get_multi_draw_calls();
+    char buf[256];
+    std::snprintf(
+        buf,
+        sizeof(buf),
+        "libvelocraft_turbo.so Aktif | Render %dx%d (%d%%) | MultiDraw Batch: %llu",
+        rw, rh, scalePct, static_cast<unsigned long long>(batches)
+    );
+    return env->NewStringUTF(buf);
 }
 
 JNIEXPORT void JNICALL
@@ -2015,6 +2148,12 @@ Java_io_velocraft_android_bridge_NativeEngineBridge_nativeConfigureRendererEnv(
     setenv("LIBGL_NORMALIZE", "1", 1);
     setenv("LIBGL_NOERROR", "1", 1);
     setenv("LIBGL_NOINTOVLHACK", "1", 1);
+    setenv("LIBGL_FASTMATH", "1", 1);
+    setenv("LIBGL_NOHIGHP", "1", 1);
+    setenv("LIBGL_SILENTSTUB", "1", 1);
+    setenv("LIBGL_NOBANNER", "1", 1);
+    setenv("LIBGL_RECYCLEFBO", "1", 1);
+    setenv("LIBGL_PSA_FOLDER", cacheDir, 1);
 
     ensureStdioRedirectedToLog();
     updateAndroidLinkerSearchPath(internalLinkerPath);
@@ -2109,6 +2248,7 @@ Java_io_velocraft_android_bridge_NativeEngineBridge_nativeLaunchDirectJvm(
 
     if (!nativesStr.empty()) {
         const std::vector<std::string> nativeEngineLibs = {
+            nativesStr + "/libvelocraft_turbo.so",
             nativesStr + "/libfreetype.so",
             nativesStr + "/libopenal.so",
             nativesStr + "/libgl4es_114.so",
@@ -2124,6 +2264,9 @@ Java_io_velocraft_android_bridge_NativeEngineBridge_nativeLaunchDirectJvm(
             if (access(soPath.c_str(), R_OK) == 0) {
                 void* h = dlopen(soPath.c_str(), RTLD_LAZY | RTLD_GLOBAL);
                 if (h) {
+                    if (soPath.find("libgl4es") != std::string::npos) {
+                        velocraft_turbo_init_gl_hooks(h);
+                    }
                     appendNativeLineToLogFile("NATIVES", "Pustaka Engine siap: " + soPath);
                 } else {
                     const char* err = dlerror();

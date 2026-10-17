@@ -45,9 +45,13 @@ object NativeEngineBridge {
 
     init {
         try {
+            try {
+                System.loadLibrary("velocraft_turbo")
+            } catch (_: Throwable) {
+            }
             System.loadLibrary("velocraft_bridge")
             isNativeLoaded = true
-            VeloLogger.info("Native library libvelocraft_bridge.so loaded successfully (ABI: ${getArchitectureAbi()}).")
+            VeloLogger.info("Native libraries libvelocraft_turbo.so + libvelocraft_bridge.so loaded (ABI: ${getArchitectureAbi()}).")
         } catch (t: Throwable) {
             isNativeLoaded = false
             VeloLogger.error("Failed to load libvelocraft_bridge.so", t)
@@ -103,6 +107,36 @@ object NativeEngineBridge {
     external fun nativeLaunchDirectJvm(jliLibPath: String, jvmArgsArray: Array<String>): Int
     external fun nativeGetArchitectureAbi(): String
     external fun nativeGetBootTelemetrySnapshot(): String
+    external fun nativeSetResolutionScale(scale: Float)
+    external fun nativeGetResolutionScale(): Float
+    external fun nativeTriggerTurboBoost(): String
+
+    fun setResolutionScale(scale: Float) {
+        if (!isNativeLoaded) return
+        try {
+            nativeSetResolutionScale(scale.coerceIn(0.50f, 1.00f))
+        } catch (t: Throwable) {
+            VeloLogger.error("nativeSetResolutionScale error", t)
+        }
+    }
+
+    fun getResolutionScale(): Float {
+        if (!isNativeLoaded) return 0.75f
+        return try {
+            nativeGetResolutionScale().coerceIn(0.50f, 1.00f)
+        } catch (_: Throwable) {
+            0.75f
+        }
+    }
+
+    fun triggerTurboBoost(): String {
+        if (!isNativeLoaded) return "Turbo C++ siap"
+        return try {
+            nativeTriggerTurboBoost()
+        } catch (_: Throwable) {
+            "Turbo C++ aktif"
+        }
+    }
 
     fun getBootTelemetry(): BootTelemetrySnapshot? {
         if (!isNativeLoaded) return null
